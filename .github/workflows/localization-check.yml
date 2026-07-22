@@ -61,7 +61,7 @@ jobs:
           sleep 20
 
 
-      - name: Run Grammar Check
+      - name: Run LanguageTool Check
         run: |
           python3 << 'EOF'
           import json
@@ -70,9 +70,10 @@ jobs:
           import urllib.parse
 
 
+          # Simulate extracted user-facing text
           text = """
-          Camera have started sucessfully
-          The configration file is invalid
+          camera[{camera_id}] not Founded.
+          Please check whether the 'camera_id' parameter of the configration file is correct
           """
 
 
@@ -102,22 +103,119 @@ jobs:
 
 
           if matches:
-              print("Grammar issues found:")
+
+              print("")
+              print("Localization grammar issues found:")
+              print("")
+
 
               for item in matches:
+
+                  offset = item.get("offset")
+                  length = item.get("length")
+
+                  wrong_text = text[
+                      offset:offset + length
+                  ]
+
+
+                  print("---------------------------")
+
                   print(
-                      "-",
+                      "Text:",
+                      wrong_text
+                  )
+
+                  print(
+                      "Message:",
                       item.get("message")
                   )
 
-                  print(
-                      "  Context:",
-                      item.get("context", {}).get("text")
+
+                  replacements = item.get(
+                      "replacements",
+                      []
                   )
+
+
+                  if replacements:
+
+                      print(
+                          "Suggestion:",
+                          [
+                              r.get("value")
+                              for r in replacements[:5]
+                          ]
+                      )
+
+
+                  print(
+                      "Rule:",
+                      item.get("rule", {}).get("id")
+                  )
+
+
+              print("")
+              sys.exit(1)
+
+
+          print(
+              "No grammar issues found"
+          )
+
+          EOF
+
+
+
+  placeholder-check:
+
+    name: Placeholder Check
+
+    runs-on: ubuntu-latest
+
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+
+      - name: Check placeholders
+        run: |
+          python3 << 'EOF'
+          import re
+          import sys
+
+
+          source = """
+          camera[{camera_id}] not Founded.
+          Please check whether the 'camera_id' parameter of the configration file is correct
+          """
+
+
+          placeholders = re.findall(
+              r"\{[^}]+\}",
+              source
+          )
+
+
+          print(
+              "Detected placeholders:",
+              placeholders
+          )
+
+
+          if "{camera_id}" not in placeholders:
+
+              print(
+                  "Missing placeholder: {camera_id}"
+              )
 
               sys.exit(1)
 
 
-          print("No grammar issues found")
+          print(
+              "Placeholder check passed"
+          )
 
           EOF
