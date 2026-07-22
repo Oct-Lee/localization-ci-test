@@ -169,7 +169,8 @@ def main() -> int:
         print("Spell check passed")
         return 0
     if errors == 0 and proc.returncode != 0:
-        print(output)
+        # Surface raw cspell stderr (e.g. unsupported Node version).
+        print(output, file=sys.stderr)
         print("cspell failed without parseable findings", file=sys.stderr)
         return proc.returncode or 1
 

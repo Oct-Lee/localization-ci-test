@@ -19,7 +19,7 @@ translations*/portuguese.py
 | Spelling | cspell + `dictionaries/unitx-terms.txt` | en, **pt-BR** (+ pt-PT dict) | **Error（阻断）** |
 | Grammar | LanguageTool (Docker) | en-US, pt-PT | **Error（阻断）** |
 
-CI 中 `LQ_STRICT_GRAMMAR=1`：拼写与语法同步检查，任一发现问题即阻断合并 / push。
+CI 中拼写与语法为**并行 job**（互不等待、互不阻断对方执行）；`LQ_STRICT_GRAMMAR=1`，最终 Gate 汇总任一失败则整体红灯。
 
 > Spelling uses **pt-BR** dictionaries because product copy (e.g. `câmera`) matches Brazilian Portuguese; LanguageTool still runs `pt-PT` for grammar to align with X-platform `pt-PT` locale labels. Orthography-reform nags from LT are filtered.
 

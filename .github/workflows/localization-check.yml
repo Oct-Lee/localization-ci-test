@@ -8,86 +8,123 @@ on:
   workflow_dispatch:
 
 jobs:
-  localization-quality-gate:
-    name: Localization Quality Gate
+  extract:
+    name: Extract
     runs-on: ubuntu-latest
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Install npm dependencies
-        run: npm install
-
-      - name: Start LanguageTool
-        run: |
-          docker run -d --name languagetool -p 8010:8010 silviof/docker-languagetool
-
       - name: Extract user-facing strings
-        id: extract
         run: |
           python3 scripts/extract_messages.py \
             --root . \
             -o out/texts.jsonl
 
-      - name: Upload extracted catalog
-        if: success()
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
           name: texts-jsonl
           path: out/texts.jsonl
 
-      # Run all checks even if one fails, so the log shows every finding.
-      # Final "Gate result" step blocks the job if any check failed.
+  consistency:
+    name: Consistency
+    needs: extract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: texts-jsonl
+          path: out
+
       - name: Consistency check
-        id: consistency
-        if: always() && steps.extract.outcome == 'success'
-        continue-on-error: true
         run: python3 scripts/check_consistency.py -i out/texts.jsonl
 
-      - name: Spell check (cspell)
-        id: spelling
-        if: always() && steps.extract.outcome == 'success'
-        continue-on-error: true
+  # Spelling and grammar run in parallel; neither waits on the other.
+  spelling:
+    name: Spell (cspell)
+    needs: extract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # cspell 10 requires Node >= 22.18
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install npm dependencies
+        run: npm install
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: texts-jsonl
+          path: out
+
+      - name: Spell check
         run: python3 scripts/check_spelling.py -i out/texts.jsonl
 
-      - name: Grammar check (LanguageTool)
-        id: grammar
-        if: always() && steps.extract.outcome == 'success'
-        continue-on-error: true
+  grammar:
+    name: Grammar (LanguageTool)
+    needs: extract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: texts-jsonl
+          path: out
+
+      - name: Start LanguageTool
+        run: |
+          docker run -d --name languagetool -p 8010:8010 silviof/docker-languagetool
+
+      - name: Grammar check
         env:
           LQ_LT_ENDPOINT: http://localhost:8010/v2/check
-          # Grammar findings block the PR / push (same as spelling).
           LQ_STRICT_GRAMMAR: "1"
         run: python3 scripts/check_grammar.py -i out/texts.jsonl
 
-      - name: Gate result
-        if: always() && steps.extract.outcome == 'success'
+  # Aggregate: overall gate fails if any parallel check failed.
+  gate:
+    name: Gate result
+    needs: [consistency, spelling, grammar]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summarize
         run: |
-          echo "consistency=${{ steps.consistency.outcome }}"
-          echo "spelling=${{ steps.spelling.outcome }}"
-          echo "grammar=${{ steps.grammar.outcome }}"
+          echo "consistency=${{ needs.consistency.result }}"
+          echo "spelling=${{ needs.spelling.result }}"
+          echo "grammar=${{ needs.grammar.result }}"
 
           failed=0
-          if [ "${{ steps.consistency.outcome }}" != "success" ]; then
+          if [ "${{ needs.consistency.result }}" != "success" ]; then
             echo "::error::Consistency check failed"
             failed=1
           fi
-          if [ "${{ steps.spelling.outcome }}" != "success" ]; then
+          if [ "${{ needs.spelling.result }}" != "success" ]; then
             echo "::error::Spell check failed"
             failed=1
           fi
-          if [ "${{ steps.grammar.outcome }}" != "success" ]; then
+          if [ "${{ needs.grammar.result }}" != "success" ]; then
             echo "::error::Grammar check failed"
             failed=1
           fi
