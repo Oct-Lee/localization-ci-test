@@ -1,7 +1,10 @@
 name: Localization Quality Gate
 
-
 on:
+  push:
+    branches:
+      - main
+
   pull_request:
 
 
@@ -9,32 +12,109 @@ jobs:
 
   spell-check:
 
+    name: Spell Check (cspell)
+
     runs-on: ubuntu-latest
+
 
     steps:
 
-    - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-    - name: cspell
-      uses: streetsidesoftware/cspell-action@v6
+
+      - name: Run cspell
+        uses: streetsidesoftware/cspell-action@v6
+        with:
+          files: |
+            src/**/*.py
+
 
 
   grammar-check:
 
+    name: Grammar Check (LanguageTool)
+
     runs-on: ubuntu-latest
+
 
     steps:
 
-    - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
 
-    - name: Start LanguageTool
-      run:
-        docker run -d \
-        -p 8010:8010 \
-        silviof/docker-languagetool
+      - name: Start LanguageTool Server
+        run: |
+          docker run \
+            -d \
+            --name languagetool \
+            -p 8010:8010 \
+            silviof/docker-languagetool
 
 
-    - name: Grammar Check
-      run:
-        python grammar_check.py
+      - name: Wait LanguageTool Ready
+        run: |
+          sleep 20
+
+
+      - name: Run Grammar Check
+        run: |
+          python3 << 'EOF'
+          import json
+          import sys
+          import urllib.request
+          import urllib.parse
+
+
+          text = """
+          Camera have started sucessfully
+          The configration file is invalid
+          """
+
+
+          data = urllib.parse.urlencode(
+              {
+                  "language": "en-US",
+                  "text": text
+              }
+          ).encode("utf-8")
+
+
+          request = urllib.request.Request(
+              "http://localhost:8010/v2/check",
+              data=data,
+              method="POST"
+          )
+
+
+          response = urllib.request.urlopen(request)
+
+          result = json.loads(
+              response.read().decode("utf-8")
+          )
+
+
+          matches = result.get("matches", [])
+
+
+          if matches:
+              print("Grammar issues found:")
+
+              for item in matches:
+                  print(
+                      "-",
+                      item.get("message")
+                  )
+
+                  print(
+                      "  Context:",
+                      item.get("context", {}).get("text")
+                  )
+
+              sys.exit(1)
+
+
+          print("No grammar issues found")
+
+          EOF
