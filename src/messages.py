@@ -1,5 +1,5 @@
 CAMERA_NOT_FOUND_ERROR = (
-    "camera[{camera_id}] not Founded，Please check whether the "
+    "Camera not Founded, Please check whether the "
     "configration file is correct"
 )
 

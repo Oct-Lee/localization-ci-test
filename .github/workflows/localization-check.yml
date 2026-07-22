@@ -4,20 +4,38 @@ on:
   push:
   pull_request:
 
+
 jobs:
+
   localization-check:
 
     runs-on: ubuntu-latest
+
 
     steps:
 
     - name: Checkout
       uses: actions/checkout@v4
 
-    - name: Install cspell
-      run: |
-        npm install -g cspell
 
-    - name: Run cspell
+    - name: Start LanguageTool
       run: |
-        cspell "src/**/*"
+        docker run \
+          -d \
+          --name languagetool \
+          -p 8010:8010 \
+          silviof/docker-languagetool
+
+
+    - name: Wait LanguageTool
+      run: |
+        sleep 20
+
+
+    - name: Check English Grammar
+      run: |
+        curl \
+        -X POST \
+        -d "language=en-US" \
+        --data-urlencode "text=Camera have started sucessfully" \
+        http://localhost:8010/v2/check
