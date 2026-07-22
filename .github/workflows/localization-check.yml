@@ -27,7 +27,7 @@ jobs:
         uses: streetsidesoftware/cspell-action@v6
         with:
           files: |
-            src/**/*.py
+            "**/*.py"
 
 
 
