@@ -1,0 +1,26 @@
+# Product / domain terms for Localization Quality Gate spell check.
+# One word per line. Case-insensitive in cspell.
+
+ProdX
+OptiX
+CorteX
+Digix
+UnitX
+unitx
+PLC
+MES
+NG
+OK
+CC
+Seq
+V6
+V6Flex
+camera_id
+controller_id
+sequence_name
+co_name
+io_index
+error_code
+error_message
+timeout
+config

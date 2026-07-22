@@ -4,276 +4,97 @@ on:
   push:
     branches:
       - main
-
   pull_request:
-
+  workflow_dispatch:
 
 jobs:
-
-  spell-check:
-
-    name: Spell Check (cspell)
-
+  localization-quality-gate:
+    name: Localization Quality Gate
     runs-on: ubuntu-latest
 
-
     steps:
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
-      - name: Install cspell
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install npm dependencies
+        run: npm install
+
+      - name: Start LanguageTool
         run: |
-          npm install -g cspell
+          docker run -d --name languagetool -p 8010:8010 silviof/docker-languagetool
 
-
-      - name: Run cspell
+      - name: Extract user-facing strings
+        id: extract
         run: |
-          cspell "src/**/*"
+          python3 scripts/extract_messages.py \
+            --root . \
+            -o out/texts.jsonl
 
+      - name: Upload extracted catalog
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: texts-jsonl
+          path: out/texts.jsonl
 
+      # Run all checks even if one fails, so the log shows every finding.
+      # Final "Gate result" step blocks the job if any check failed.
+      - name: Consistency check
+        id: consistency
+        if: always() && steps.extract.outcome == 'success'
+        continue-on-error: true
+        run: python3 scripts/check_consistency.py -i out/texts.jsonl
 
-  grammar-check:
+      - name: Spell check (cspell)
+        id: spelling
+        if: always() && steps.extract.outcome == 'success'
+        continue-on-error: true
+        run: python3 scripts/check_spelling.py -i out/texts.jsonl
 
-    name: Grammar Check (LanguageTool)
+      - name: Grammar check (LanguageTool)
+        id: grammar
+        if: always() && steps.extract.outcome == 'success'
+        continue-on-error: true
+        env:
+          LQ_LT_ENDPOINT: http://localhost:8010/v2/check
+          # Grammar findings block the PR / push (same as spelling).
+          LQ_STRICT_GRAMMAR: "1"
+        run: python3 scripts/check_grammar.py -i out/texts.jsonl
 
-    runs-on: ubuntu-latest
-
-
-    steps:
-
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-
-      - name: Start LanguageTool Server
+      - name: Gate result
+        if: always() && steps.extract.outcome == 'success'
         run: |
-          docker run \
-            -d \
-            --name languagetool \
-            -p 8010:8010 \
-            silviof/docker-languagetool
-
-
-      - name: Wait LanguageTool Ready
-        run: |
-          sleep 20
-
-
-      - name: Run LanguageTool Check
-        run: |
-          python3 << 'EOF'
-          import json
-          import sys
-          import urllib.request
-          import urllib.parse
-          import re
-
-
-          # Example extracted user-facing text
-          text = """
-          camera[{camera_id}] not Founded.
-          Please check whether the 'camera_id' parameter of the configration file is correct.
-          Camera have started.
-          """
-
-
-          #
-          # Replace placeholders before grammar analysis
-          #
-          check_text = re.sub(
-              r"\{[^}]+\}",
-              "DEVICE_VALUE",
-              text
-          )
-
-
-          data = urllib.parse.urlencode(
-              {
-                  "language": "en-US",
-                  "text": check_text
-              }
-          ).encode("utf-8")
-
-
-          request = urllib.request.Request(
-              "http://localhost:8010/v2/check",
-              data=data,
-              method="POST"
-          )
-
-
-          response = urllib.request.urlopen(request)
-
-
-          result = json.loads(
-              response.read().decode("utf-8")
-          )
-
-
-          matches = result.get(
-              "matches",
-              []
-          )
-
-
-          if matches:
-
-              print("")
-              print(
-                  "Localization language issues found:"
-              )
-              print("")
-
-
-              for item in matches:
-
-                  offset = item.get(
-                      "offset",
-                      0
-                  )
-
-                  length = item.get(
-                      "length",
-                      0
-                  )
-
-
-                  wrong_text = check_text[
-                      offset:
-                      offset + length
-                  ]
-
-
-                  print(
-                      "---------------------------"
-                  )
-
-
-                  print(
-                      "Text:",
-                      wrong_text
-                  )
-
-
-                  print(
-                      "Message:",
-                      item.get(
-                          "message"
-                      )
-                  )
-
-
-                  print(
-                      "Rule:",
-                      item.get(
-                          "rule",
-                          {}
-                      ).get(
-                          "id"
-                      )
-                  )
-
-
-                  replacements = item.get(
-                      "replacements",
-                      []
-                  )
-
-
-                  if replacements:
-
-                      print(
-                          "Suggestion:",
-                          [
-                              r.get("value")
-                              for r in replacements[:5]
-                          ]
-                      )
-
-
-              print("")
-
-              sys.exit(1)
-
-
-          print(
-              "LanguageTool check passed"
-          )
-
-
-          EOF
-
-
-
-  placeholder-check:
-
-    name: Placeholder Check
-
-    runs-on: ubuntu-latest
-
-
-    steps:
-
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-
-      - name: Check Placeholder Consistency
-        run: |
-          python3 << 'EOF'
-          import re
-          import sys
-
-
-          #
-          # Example extracted text
-          #
-          text = """
-          camera[{camera_id}] not Founded.
-          Please check whether the 'camera_id' parameter is correct.
-          """
-
-
-          placeholders = re.findall(
-              r"\{[^}]+\}",
-              text
-          )
-
-
-          print(
-              "Found placeholders:"
-          )
-
-
-          for item in placeholders:
-              print(
-                  " ",
-                  item
-              )
-
-
-          required = [
-              "{camera_id}"
-          ]
-
-
-          for item in required:
-
-              if item not in placeholders:
-
-                  print(
-                      "Missing placeholder:",
-                      item
-                  )
-
-                  sys.exit(1)
-
-
-          print(
-              "Placeholder check passed"
-          )
-
-
-          EOF
+          echo "consistency=${{ steps.consistency.outcome }}"
+          echo "spelling=${{ steps.spelling.outcome }}"
+          echo "grammar=${{ steps.grammar.outcome }}"
+
+          failed=0
+          if [ "${{ steps.consistency.outcome }}" != "success" ]; then
+            echo "::error::Consistency check failed"
+            failed=1
+          fi
+          if [ "${{ steps.spelling.outcome }}" != "success" ]; then
+            echo "::error::Spell check failed"
+            failed=1
+          fi
+          if [ "${{ steps.grammar.outcome }}" != "success" ]; then
+            echo "::error::Grammar check failed"
+            failed=1
+          fi
+
+          if [ "$failed" -ne 0 ]; then
+            echo "Localization Quality Gate FAILED — consistency / spelling / grammar must all pass."
+            exit 1
+          fi
+
+          echo "Localization Quality Gate passed."

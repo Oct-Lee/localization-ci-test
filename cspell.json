@@ -1,0 +1,37 @@
+{
+  "version": "0.2",
+  "language": "en",
+  "import": [
+    "@cspell/dict-pt-br/cspell-ext.json",
+    "@cspell/dict-pt-pt/cspell-ext.json"
+  ],
+  "words": [],
+  "dictionaries": ["unitx-terms"],
+  "dictionaryDefinitions": [
+    {
+      "name": "unitx-terms",
+      "path": "./dictionaries/unitx-terms.txt",
+      "addWords": true
+    }
+  ],
+  "ignorePaths": [
+    ".git/**",
+    "node_modules/**",
+    "out/texts.jsonl",
+    "out/spell/manifest.json",
+    "scripts/**",
+    "src/**",
+    "package-lock.json",
+    "package.json"
+  ],
+  "overrides": [
+    {
+      "filename": "out/spell/en/**",
+      "language": "en"
+    },
+    {
+      "filename": "out/spell/pt/**",
+      "language": "pt-BR,pt"
+    }
+  ]
+}

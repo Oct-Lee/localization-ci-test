@@ -1,0 +1,18 @@
+{
+  "name": "localization-ci-test",
+  "private": true,
+  "description": "Localization Quality Gate PoC",
+  "scripts": {
+    "spell": "cspell lint --no-progress",
+    "lq:extract": "python3 scripts/extract_messages.py --root . -o out/texts.jsonl",
+    "lq:consistency": "python3 scripts/check_consistency.py -i out/texts.jsonl",
+    "lq:spell": "python3 scripts/check_spelling.py -i out/texts.jsonl",
+    "lq:grammar": "python3 scripts/check_grammar.py -i out/texts.jsonl",
+    "lq": "python3 scripts/run_lq_gate.py"
+  },
+  "devDependencies": {
+    "@cspell/dict-pt-br": "^2.4.2",
+    "@cspell/dict-pt-pt": "^3.0.6",
+    "cspell": "^10.0.1"
+  }
+}

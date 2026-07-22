@@ -1,0 +1,10 @@
+# LanguageTool rule IDs to ignore (one per line).
+# Style / preference noise for product UI strings.
+# Spelling (MORFOLOGIK_*) is filtered in code — owned by cspell.
+
+EN_QUOTES
+WHITESPACE_RULE
+COMMA_PARENTHESIS_WHITESPACE
+SENTENCE_WHITESPACE
+UPPERCASE_SENTENCE_START
+ENGLISH_WORD_REPEAT_BEGINNING_RULE
