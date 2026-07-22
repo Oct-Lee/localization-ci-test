@@ -68,19 +68,31 @@ jobs:
           import sys
           import urllib.request
           import urllib.parse
+          import re
 
 
-          # Simulate extracted user-facing text
+          # Example extracted user-facing text
           text = """
           camera[{camera_id}] not Founded.
-          Please check whether the 'camera_id' parameter of the configration file is correct
+          Please check whether the 'camera_id' parameter of the configration file is correct.
+          Camera have started.
           """
+
+
+          #
+          # Replace placeholders before grammar analysis
+          #
+          check_text = re.sub(
+              r"\{[^}]+\}",
+              "DEVICE_VALUE",
+              text
+          )
 
 
           data = urllib.parse.urlencode(
               {
                   "language": "en-US",
-                  "text": text
+                  "text": check_text
               }
           ).encode("utf-8")
 
@@ -94,41 +106,73 @@ jobs:
 
           response = urllib.request.urlopen(request)
 
+
           result = json.loads(
               response.read().decode("utf-8")
           )
 
 
-          matches = result.get("matches", [])
+          matches = result.get(
+              "matches",
+              []
+          )
 
 
           if matches:
 
               print("")
-              print("Localization grammar issues found:")
+              print(
+                  "Localization language issues found:"
+              )
               print("")
 
 
               for item in matches:
 
-                  offset = item.get("offset")
-                  length = item.get("length")
+                  offset = item.get(
+                      "offset",
+                      0
+                  )
 
-                  wrong_text = text[
-                      offset:offset + length
+                  length = item.get(
+                      "length",
+                      0
+                  )
+
+
+                  wrong_text = check_text[
+                      offset:
+                      offset + length
                   ]
 
 
-                  print("---------------------------")
+                  print(
+                      "---------------------------"
+                  )
+
 
                   print(
                       "Text:",
                       wrong_text
                   )
 
+
                   print(
                       "Message:",
-                      item.get("message")
+                      item.get(
+                          "message"
+                      )
+                  )
+
+
+                  print(
+                      "Rule:",
+                      item.get(
+                          "rule",
+                          {}
+                      ).get(
+                          "id"
+                      )
                   )
 
 
@@ -149,19 +193,15 @@ jobs:
                       )
 
 
-                  print(
-                      "Rule:",
-                      item.get("rule", {}).get("id")
-                  )
-
-
               print("")
+
               sys.exit(1)
 
 
           print(
-              "No grammar issues found"
+              "LanguageTool check passed"
           )
+
 
           EOF
 
@@ -180,42 +220,60 @@ jobs:
         uses: actions/checkout@v4
 
 
-      - name: Check placeholders
+      - name: Check Placeholder Consistency
         run: |
           python3 << 'EOF'
           import re
           import sys
 
 
-          source = """
+          #
+          # Example extracted text
+          #
+          text = """
           camera[{camera_id}] not Founded.
-          Please check whether the 'camera_id' parameter of the configration file is correct
+          Please check whether the 'camera_id' parameter is correct.
           """
 
 
           placeholders = re.findall(
               r"\{[^}]+\}",
-              source
+              text
           )
 
 
           print(
-              "Detected placeholders:",
-              placeholders
+              "Found placeholders:"
           )
 
 
-          if "{camera_id}" not in placeholders:
-
+          for item in placeholders:
               print(
-                  "Missing placeholder: {camera_id}"
+                  " ",
+                  item
               )
 
-              sys.exit(1)
+
+          required = [
+              "{camera_id}"
+          ]
+
+
+          for item in required:
+
+              if item not in placeholders:
+
+                  print(
+                      "Missing placeholder:",
+                      item
+                  )
+
+                  sys.exit(1)
 
 
           print(
               "Placeholder check passed"
           )
+
 
           EOF
