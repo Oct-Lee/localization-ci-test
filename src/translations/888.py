@@ -3,7 +3,7 @@
 
 CAMERA_NOT_FOUND_ERROR = (
     "camera[{camera_id}] not Founded. "  # wrong word (Founded); LT/cspell may differ
-    "Please check whether the 'camera_id' parameter oef the configration fisle is correct"  # spelling: configration, fisle
+    "Please check whether the 'camera_id' parameter oef th2e configration fisle is correct"  # spelling: configration, fisle
 )
 
 CAMERA_STARTED_MSG = "Cuamera have started."  # may not be caught by free LT rules
