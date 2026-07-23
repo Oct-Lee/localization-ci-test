@@ -111,7 +111,7 @@ def extract_assignments(path: Path) -> list[tuple[int, str, str]]:
     return items
 
 
-def extract_from_file(path: Path, root: Path) -> list[dict]:
+def extract_from_file(path: Path, root: Path, *, in_diff: bool = True) -> list[dict]:
     if path.suffix == ".py":
         items = extract_assignments(path)
     else:
@@ -130,9 +130,25 @@ def extract_from_file(path: Path, root: Path) -> list[dict]:
             "locale": locale,
             "text": text,
             "package": package,
+            "in_diff": in_diff,
         }
         for lineno, key, text in items
     ]
+
+
+def sibling_candidate_files(root: Path, changed: list[Path]) -> list[Path]:
+    """Include other candidate *.py in the same directories as changed files.
+
+    Needed so consistency can compare placeholders across english/chinese/…
+    even when the PR only touches one locale file.
+    """
+    extra: set[Path] = set()
+    for path in changed:
+        parent = path.parent
+        for sibling in parent.glob("*.py"):
+            if is_candidate_file(sibling, root):
+                extra.add(sibling.resolve())
+    return sorted(extra)
 
 
 def is_candidate_file(path: Path, root: Path) -> bool:
@@ -229,17 +245,33 @@ def main() -> int:
                 path = root / path
             if is_candidate_file(path, root):
                 files.append(path.resolve())
-        files = sorted(set(files))
+        changed_set = set(files)
+        # Same as PR mode: load directory siblings for placeholder consistency.
+        files = sibling_candidate_files(root, sorted(changed_set)) or sorted(changed_set)
+        print(f"Explicit files (+ same-dir siblings): {len(files)}")
+        for path in files:
+            mark = "changed" if path in changed_set else "sibling"
+            print(f"  - [{mark}] {path.relative_to(root).as_posix()}")
     elif args.changed_only:
         if not args.base:
             print("--changed-only requires --base", file=sys.stderr)
             return 1
-        files = git_changed_files(root, args.base, args.head)
-        print(f"Changed candidate files vs {args.base}...{args.head}: {len(files)}")
-        for path in files:
+        changed = git_changed_files(root, args.base, args.head)
+        print(f"Changed candidate files vs {args.base}...{args.head}: {len(changed)}")
+        for path in changed:
             print(f"  - {path.relative_to(root).as_posix()}")
+        changed_set = set(changed)
+        # Pull sibling locale/message modules in the same directories for
+        # placeholder consistency, without treating them as "in_diff".
+        files = sibling_candidate_files(root, changed)
+        if files:
+            print(f"With same-directory siblings for consistency: {len(files)}")
+            for path in files:
+                mark = "changed" if path in changed_set else "sibling"
+                print(f"  - [{mark}] {path.relative_to(root).as_posix()}")
     else:
         files = discover_files(root, args.globs)
+        changed_set = set(files)
 
     if not files:
         args.output.parent.mkdir(parents=True, exist_ok=True)
@@ -251,8 +283,9 @@ def main() -> int:
     scanned = 0
     for path in files:
         scanned += 1
+        in_diff = path in changed_set
         try:
-            extracted = extract_from_file(path, root)
+            extracted = extract_from_file(path, root, in_diff=in_diff)
         except SyntaxError as exc:
             print(f"Syntax error in {path}: {exc}", file=sys.stderr)
             return 1
@@ -261,7 +294,7 @@ def main() -> int:
         locale = extracted[0]["locale"]
         print(
             f"  {path.relative_to(root).as_posix()}: "
-            f"{len(extracted)} strings (locale={locale})"
+            f"{len(extracted)} strings (locale={locale}, in_diff={in_diff})"
         )
         records.extend(extracted)
 

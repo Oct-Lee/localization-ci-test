@@ -41,7 +41,12 @@ LQ_STRICT_GRAMMAR=1 python3 scripts/check_grammar.py -i out/texts.jsonl
 
 不必定叫 `scripts/`，但需要独立抽取/检查逻辑（比全部写进 workflow 更好维护）。
 
-## 限制
+## 已知坑（已修）
+
+| 问题 | 原因 | 修复 |
+|------|------|------|
+| `oef` 等 3 字母错词不报 | cspell 默认 `minWordLength=4` | 设为 `2` |
+| `english.py`/`chinese.py` 占位符不一致不报 | PR 只改一个文件时未加载同目录其它语言文件 | 自动加载同目录 sibling，一致性用全量；拼写/语法只检 `in_diff` |
 
 - 目前主要支持 Python 大写常量字符串  
 - 中文不做 LT 拼写/语法（工具能力不足）；仍做一致性  

@@ -1,16 +1,14 @@
 #!/usr/bin/env python3
 """Consistency checks for extracted user-facing strings.
 
-Default (PR incremental — safe):
-  - empty / whitespace-only strings
-  - Chinese punctuation inside English strings
-  - placeholder mismatch for keys that appear in 2+ locales in THIS catalog
+Default (PR incremental):
+  - empty / whitespace-only strings — only for files in the PR diff
+  - Chinese punctuation in English — only for files in the PR diff
+  - placeholder mismatch — for any key that appears in a diff file,
+    compare all locales present in the catalog (including same-dir siblings)
 
 Optional (--strict-locale-alignment):
   - require every English key to exist in every other locale present
-  - flag keys present in other locales but missing in English
-
-Does NOT hardcode specific words or sample keys.
 """
 
 from __future__ import annotations
@@ -38,8 +36,10 @@ def check_records(
 ) -> list[tuple]:
     findings: list[tuple] = []
 
-    # Per-record checks (any file / any locale)
+    # Per-record checks: only for strings that are part of the PR/push diff.
     for record in records:
+        if record.get("in_diff", True) is False:
+            continue
         text = record.get("text", "")
         key = record["key"]
         locale = record["locale"]
@@ -62,19 +62,22 @@ def check_records(
                 )
             )
 
-    # key -> locale -> list[record]  (same key may appear in multiple files)
+    # key -> locale -> list[record]
     by_key: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(
         lambda: defaultdict(list)
     )
     for record in records:
         by_key[record["key"]][record["locale"]].append(record)
 
-    # Placeholder consistency for keys present in multiple locales
-    for key, locales in by_key.items():
+    # Keys touched by the diff (or all keys if no in_diff markers)
+    touched_keys = {
+        r["key"] for r in records if r.get("in_diff", True) is not False
+    }
+
+    for key in sorted(touched_keys):
+        locales = by_key.get(key, {})
         if len(locales) < 2:
             continue
-        # Compare each locale's placeholder set against English if present,
-        # otherwise against the first locale as reference.
         if "en" in locales:
             ref_locale = "en"
         else:
@@ -102,8 +105,6 @@ def check_records(
     if not strict_locale_alignment:
         return findings
 
-    # Strict: within each package directory, align keys across locales that
-    # appear in the catalog for that package.
     packages: dict[str, dict[str, dict[str, dict[str, Any]]]] = defaultdict(
         lambda: defaultdict(dict)
     )

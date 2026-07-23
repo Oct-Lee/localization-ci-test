@@ -113,6 +113,10 @@ def main() -> int:
 
     findings = 0
     for record in records:
+        # Sibling files are for consistency only — do not spell/grammar them
+        # unless they were part of the PR diff.
+        if record.get("in_diff", True) is False:
+            continue
         locale = record["locale"]
         if locale not in LOCALE_LT:
             print(

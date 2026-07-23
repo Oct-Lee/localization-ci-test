@@ -42,12 +42,18 @@ def prepare_spell_inputs(
     records: list[dict],
     spell_root: Path,
 ) -> dict[str, dict]:
-    """Write spell input files; return map absolute_path -> record."""
+    """Write spell input files; return map absolute_path -> record.
+
+    Only checks records from files that are in the PR/push diff (in_diff).
+    Sibling files loaded for consistency are skipped here.
+    """
     if spell_root.exists():
         shutil.rmtree(spell_root)
     mapping: dict[str, dict] = {}
     index = 0
     for record in records:
+        if record.get("in_diff", True) is False:
+            continue
         if record["locale"] not in {"en", "pt"}:
             continue
         index += 1
