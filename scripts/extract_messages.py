@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Extract SCREAMING_SNAKE string constants from translation modules.
+"""Extract user-facing SCREAMING_SNAKE string constants from changed source files.
 
-Discovers *.py under translations*/ (not only english/chinese/portuguese.py).
-Locale is taken from known filenames, else inferred from string content.
+Scope (default):
+  - Any path in the repo (NOT limited to translations/)
+  - Supported: *.py module-level NAME = \"...\" constants
+  - Locale from known filenames, else inferred from text content
 
-Outputs JSONL records:
+PR / push incremental mode:
+  --changed-only --base <sha>  only files changed vs base
+
+Outputs JSONL:
   {"file","line","key","locale","text","package"}
-
-PR mode:
-  --changed-only --base <sha>  only extract from files changed vs base
 """
 
 from __future__ import annotations
@@ -30,14 +32,26 @@ LOCALE_BY_STEM = {
     "pt": "pt",
 }
 
-SKIP_STEMS = {
-    "__init__",
-    "language",
+SKIP_STEMS = {"__init__"}
+
+SKIP_DIR_PARTS = {
+    ".git",
+    "node_modules",
+    ".venv",
+    "venv",
+    "__pycache__",
+    ".pants.d",
+    "out",
+    "dist",
+    "build",
+    "third_party",
+    ".tox",
 }
+
+SUPPORTED_SUFFIXES = {".py"}
 
 SCREAMING_SNAKE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 CJK_RE = re.compile(r"[\u4e00-\u9fff]")
-# Common Portuguese orthography markers
 PT_RE = re.compile(
     r"[ãõáéíóúâêôçÃÕÁÉÍÓÚÂÊÔÇ]|não|configuração|câmera|verifique|por favor",
     re.IGNORECASE,
@@ -45,7 +59,6 @@ PT_RE = re.compile(
 
 
 def _join_string(node: ast.AST) -> str | None:
-    """Evaluate constant string expressions (literals and implicit concat)."""
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
     if isinstance(node, ast.JoinedStr):
@@ -68,7 +81,6 @@ def _join_string(node: ast.AST) -> str | None:
 
 
 def infer_locale(stem: str, texts: list[str]) -> str:
-    """Map filename or content to locale code."""
     known = LOCALE_BY_STEM.get(stem.lower())
     if known:
         return known
@@ -81,7 +93,6 @@ def infer_locale(stem: str, texts: list[str]) -> str:
 
 
 def extract_assignments(path: Path) -> list[tuple[int, str, str]]:
-    """Return list of (lineno, key, text)."""
     source = path.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(path))
     items: list[tuple[int, str, str]] = []
@@ -101,7 +112,10 @@ def extract_assignments(path: Path) -> list[tuple[int, str, str]]:
 
 
 def extract_from_file(path: Path, root: Path) -> list[dict]:
-    items = extract_assignments(path)
+    if path.suffix == ".py":
+        items = extract_assignments(path)
+    else:
+        return []
     if not items:
         return []
     texts = [t for _, _, t in items]
@@ -121,54 +135,52 @@ def extract_from_file(path: Path, root: Path) -> list[dict]:
     ]
 
 
-def is_translation_py(path: Path, root: Path) -> bool:
-    if path.suffix != ".py" or not path.is_file():
+def is_candidate_file(path: Path, root: Path) -> bool:
+    """True if path is a supported source file anywhere in the repo."""
+    if not path.is_file():
+        return False
+    if path.suffix not in SUPPORTED_SUFFIXES:
         return False
     if path.stem in SKIP_STEMS:
         return False
     try:
         rel_parts = path.resolve().relative_to(root.resolve()).parts
     except ValueError:
-        rel_parts = path.parts
-    return any(p.startswith("translations") for p in rel_parts)
+        return False
+    if any(part in SKIP_DIR_PARTS for part in rel_parts):
+        return False
+    # Do not extract from the gate's own tooling
+    if len(rel_parts) >= 1 and rel_parts[0] in {"scripts"}:
+        return False
+    return True
 
 
 def discover_files(root: Path, globs: list[str] | None) -> list[Path]:
     files: set[Path] = set()
-    patterns = globs or [
-        "**/translations*/**/*.py",
-        "**/translations/**/*.py",
-    ]
+    patterns = globs or ["**/*.py"]
     for pattern in patterns:
         for path in root.glob(pattern):
-            if is_translation_py(path, root):
+            if is_candidate_file(path, root):
                 files.add(path.resolve())
     return sorted(files)
 
 
-def changed_translation_files(root: Path, base: str) -> list[Path]:
-    """Return translation *.py files changed vs git base ref."""
-    cmd = ["git", "diff", "--name-only", "--diff-filter=ACMR", f"{base}...HEAD"]
-    proc = subprocess.run(
-        cmd,
-        cwd=root,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if proc.returncode != 0:
-        # Fallback for shallow / first push
-        cmd = ["git", "diff", "--name-only", "--diff-filter=ACMR", f"{base}", "HEAD"]
+def git_changed_files(root: Path, base: str) -> list[Path]:
+    """Return candidate source files changed vs git base ref."""
+    attempts = [
+        ["git", "diff", "--name-only", "--diff-filter=ACMR", f"{base}...HEAD"],
+        ["git", "diff", "--name-only", "--diff-filter=ACMR", base, "HEAD"],
+    ]
+    proc = None
+    for cmd in attempts:
         proc = subprocess.run(
-            cmd,
-            cwd=root,
-            capture_output=True,
-            text=True,
-            check=False,
+            cmd, cwd=root, capture_output=True, text=True, check=False
         )
-    if proc.returncode != 0:
-        print(proc.stderr, file=sys.stderr)
-        raise RuntimeError(f"git diff failed against base={base}")
+        if proc.returncode == 0:
+            break
+    if proc is None or proc.returncode != 0:
+        err = proc.stderr if proc else "no attempt"
+        raise RuntimeError(f"git diff failed against base={base}: {err}")
 
     files: list[Path] = []
     for line in proc.stdout.splitlines():
@@ -176,7 +188,7 @@ def changed_translation_files(root: Path, base: str) -> list[Path]:
         if not line:
             continue
         path = (root / line).resolve()
-        if is_translation_py(path, root):
+        if is_candidate_file(path, root):
             files.append(path)
     return sorted(set(files))
 
@@ -184,73 +196,58 @@ def changed_translation_files(root: Path, base: str) -> list[Path]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path.cwd())
-    parser.add_argument(
-        "--glob",
-        action="append",
-        dest="globs",
-        default=None,
-        help="Glob under root (repeatable)",
-    )
+    parser.add_argument("--glob", action="append", dest="globs", default=None)
     parser.add_argument(
         "--changed-only",
         action="store_true",
-        help="Only extract files changed vs --base (PR incremental mode)",
+        help="Only extract files changed vs --base (PR/push incremental)",
     )
     parser.add_argument(
         "--base",
         default="",
-        help="Git base ref/sha for --changed-only (e.g. origin/main or PR base sha)",
+        help="Git base ref/sha for --changed-only",
     )
-    parser.add_argument(
-        "--files",
-        nargs="*",
-        default=None,
-        help="Explicit file paths to extract (repo-relative or absolute)",
-    )
+    parser.add_argument("--files", nargs="*", default=None)
     parser.add_argument("-o", "--output", type=Path, default=Path("out/texts.jsonl"))
     args = parser.parse_args()
     root = args.root.resolve()
 
-    if args.files:
+    if args.files is not None:
         files = []
         for item in args.files:
             path = Path(item)
             if not path.is_absolute():
                 path = root / path
-            if is_translation_py(path, root):
+            if is_candidate_file(path, root):
                 files.append(path.resolve())
         files = sorted(set(files))
     elif args.changed_only:
         if not args.base:
             print("--changed-only requires --base", file=sys.stderr)
             return 1
-        files = changed_translation_files(root, args.base)
-        print(f"Changed translation files vs {args.base}: {len(files)}")
+        files = git_changed_files(root, args.base)
+        print(f"Changed candidate files vs {args.base}: {len(files)}")
         for path in files:
             print(f"  - {path.relative_to(root).as_posix()}")
     else:
         files = discover_files(root, args.globs)
 
     if not files:
-        # PR with no translation file changes: empty catalog, checks pass.
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text("", encoding="utf-8")
-        print("No translation files to extract; wrote empty catalog.")
+        print("No candidate files to extract; wrote empty catalog.")
         return 0
 
     records: list[dict] = []
+    scanned = 0
     for path in files:
+        scanned += 1
         try:
             extracted = extract_from_file(path, root)
         except SyntaxError as exc:
             print(f"Syntax error in {path}: {exc}", file=sys.stderr)
             return 1
         if not extracted:
-            print(
-                f"Warning: no SCREAMING_SNAKE strings in "
-                f"{path.relative_to(root).as_posix()}",
-                file=sys.stderr,
-            )
             continue
         locale = extracted[0]["locale"]
         print(
@@ -264,7 +261,9 @@ def main() -> int:
         for record in records:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
 
-    print(f"Extracted {len(records)} strings from {len(files)} files → {args.output}")
+    print(
+        f"Scanned {scanned} files; extracted {len(records)} strings → {args.output}"
+    )
     return 0
 
 

@@ -1,134 +1,69 @@
 # Localization Quality Gate — PoC
 
-GitHub CI gate that checks **user-facing translation strings** (not identifiers)
-for spelling, grammar, and cross-locale consistency.
+GitHub CI gate：对 **PR / push 中变更或新建的文件** 抽取用户可见字符串，做拼写、语法与一致性检查。
 
-Designed to mirror [unitx-monorepo](https://github.com/) Pattern A:
+**不做整仓扫描**；**不限定 `translations/` 目录**——仓库任意路径只要改到含文案常量的源文件都会检。
+
+## 会检查什么
+
+从变更文件中抽取模块级 `SCREAMING_SNAKE = "..."` 字符串（用户可见文案常量），然后：
+
+| 检查 | 工具 | 严重度 |
+|------|------|--------|
+| 一致性（空串、占位符、英文中文标点等） | `check_consistency.py` | Error 阻断 |
+| 拼写 | cspell | Error 阻断 |
+| 语法 | LanguageTool | Error 阻断（`LQ_STRICT_GRAMMAR=1`） |
+
+中文内容：一致性会检；拼写/语法跳过（按 locale 推断）。
+
+**不会检查：** 变量名、函数名、类名、未改动的历史文件。
+
+## 必须要 `scripts/` 吗？
+
+**不必定叫 `scripts/`**，但需要有一段可执行的抽取 + 检查逻辑：
+
+| 做法 | 说明 |
+|------|------|
+| 独立脚本（当前：`scripts/*.py`） | **推荐**：可本地复跑、易测、workflow 只负责编排 |
+| 全部写进 workflow `run: \|` | 可以，但难维护、难本地调试 |
+| 只用 Marketplace Action 扫整文件 | 会把标识符当单词，误报高，**不推荐**单独使用 |
+
+目录可以改成 `tools/lq/` 等，本质是「抽取器 + 检查器」，不是文件夹名字本身。
+
+## PR 如何触发
 
 ```text
-translations*/english.py
-translations*/chinese.py
-translations*/portuguese.py
+pull_request / push
+    → git diff base...HEAD（任意路径）
+    → 从变更的 *.py 抽取文案常量
+    → 并行：consistency / spelling / grammar
+    → gate 汇总阻断
 ```
 
-## What it checks
-
-| Check | Tool | Locales | Severity |
-|-------|------|---------|----------|
-| Key alignment / placeholders / empty strings / CN punct in EN | `scripts/check_consistency.py` | en/zh/pt | **Error** |
-| Spelling | cspell + `dictionaries/unitx-terms.txt` | en, **pt-BR** (+ pt-PT dict) | **Error（阻断）** |
-| Grammar | LanguageTool (Docker) | en-US, pt-PT | **Error（阻断）** |
-
-CI 中拼写与语法为**并行 job**（互不等待、互不阻断对方执行）；`LQ_STRICT_GRAMMAR=1`，最终 Gate 汇总任一失败则整体红灯。
-
-> Spelling uses **pt-BR** dictionaries because product copy (e.g. `câmera`) matches Brazilian Portuguese; LanguageTool still runs `pt-PT` for grammar to align with X-platform `pt-PT` locale labels. Orthography-reform nags from LT are filtered.
-
-Chinese (`chinese.py`) is included in consistency checks only (no spell/grammar).
-
-## Layout
-
-```text
-src/translations/
-  english.py | chinese.py | portuguese.py   # 标准语言文件名
-  *.py                                      # 其它文案模块也会被扫描（按内容推断 locale）
-scripts/
-  extract_messages.py   # 支持全量 / --changed-only PR 增量
-```
-
-### 为什么以前新增 `666.py` / `888.py` 不会被检查？
-
-旧逻辑**只认**文件名 `english.py` / `chinese.py` / `portuguese.py`。  
-现已改为扫描 `translations*/**/*.py`，并用文件名或文案内容推断 `en` / `zh` / `pt`。
-
-### PR 增量
-
-`pull_request` 事件下使用：
+## 本地运行
 
 ```bash
-python3 scripts/extract_messages.py --changed-only --base <PR_BASE_SHA>
-```
+# 模拟 PR：只抽相对 base 的变更文件
+python3 scripts/extract_messages.py --changed-only --base origin/main -o out/texts.jsonl
 
-只抽取相对 base **变更过的** translations 下 `.py`，不做整仓检测。
+# 指定文件（任意路径）
+python3 scripts/extract_messages.py --files path/to/any.py -o out/texts.jsonl
 
-## Local run
-
-### Extract only
-
-```bash
-python3 scripts/extract_messages.py --root . -o out/texts.jsonl
-```
-
-### Consistency
-
-```bash
 python3 scripts/check_consistency.py -i out/texts.jsonl
-```
-
-### Spelling
-
-```bash
-npm install
-python3 scripts/check_spelling.py -i out/texts.jsonl
-```
-
-### Grammar (needs LanguageTool)
-
-```bash
-docker run -d --name languagetool -p 8010:8010 silviof/docker-languagetool
-# wait until ready, then:
+npm install && python3 scripts/check_spelling.py -i out/texts.jsonl
+# LanguageTool 就绪后：
 python3 scripts/check_grammar.py -i out/texts.jsonl
 ```
 
-### Full gate
+## 误报控制
 
-```bash
-# Skip grammar if Docker is unavailable:
-python3 scripts/run_lq_gate.py --skip-grammar
+1. 先抽取字符串再检查（cspell 看不到常量名）  
+2. [`dictionaries/unitx-terms.txt`](dictionaries/unitx-terms.txt) 术语表  
+3. [`languagetool-ignore.txt`](languagetool-ignore.txt) 规则忽略  
+4. 跳过 `scripts/`、`node_modules/`、`third_party/` 等目录  
 
-# Full (LanguageTool must be on :8010):
-python3 scripts/run_lq_gate.py
-```
+## 当前限制（PoC）
 
-## Intentional bad examples (this PoC)
-
-[`src/translations/english.py`](src/translations/english.py) includes known issues so CI can prove the gate works:
-
-- Spelling: `Founded`, `configration`
-- Grammar: `Camera have started` (warning)
-- Chinese punctuation in English: `，`
-- Empty string: `EMPTY_PLACEHOLDER`
-- Placeholder mismatch vs Chinese: `PLACEHOLDER_MISMATCH_DEMO`
-
-Expect **failing** CI until those samples are fixed — that is intentional.
-
-## False-positive controls
-
-1. **Extract-then-check** — cspell only sees string values under `out/spell/`, never constant names like `CAMERA_NOT_FOUND_ERROR`.
-2. **Project dictionary** — add product terms to [`dictionaries/unitx-terms.txt`](dictionaries/unitx-terms.txt).
-3. **LanguageTool ignores** — add rule IDs to [`languagetool-ignore.txt`](languagetool-ignore.txt); style categories are already filtered.
-4. **Tiered gate** — grammar does not block by default.
-
-## Porting to unitx-monorepo
-
-1. Copy `scripts/`, `cspell.json`, `dictionaries/`, `languagetool-ignore.txt`.
-2. Point extract globs at P0 roots, for example:
-
-```bash
-python3 scripts/extract_messages.py --root . \
-  --glob 'apps/production/production_src/translations_prod/*.py' \
-  --glob 'shared/config/config/translations/*.py' \
-  --glob 'apps/optix/optix_src/server/translations_optix/*.py' \
-  --glob 'apps/digix_client/digix_client_src/translations/*.py' \
-  --glob 'apps/cortex/backend/translations_backend/*.py' \
-  --glob 'platform/boot_check/translations/*.py' \
-  -o out/texts.jsonl
-```
-
-3. Add a workflow job similar to [`.github/workflows/localization-check.yml`](.github/workflows/localization-check.yml).
-4. For first rollout on a large catalog, introduce an allowlist/baseline of known findings so only **new** issues fail the PR (not included in this PoC).
-
-## Out of scope (Phase 1)
-
-- JS `TranslationsCnst`, X-platform `i18n.csv`, i18next / vue-i18n
-- Scattered `raise ValueError("...")` / log strings
-- README / docs prose
+- 仅支持 **Python** 模块级大写常量字符串  
+- 尚未覆盖 JS/CSV/i18next 等格式（可后续加抽取器）  
+- 散落的 `raise ValueError("...")` 默认不抽（避免噪声；若需要可另开规则）

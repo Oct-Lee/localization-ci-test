@@ -14,14 +14,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # Need full history for PR base...HEAD diff
           fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Extract user-facing strings (PR incremental)
+      # PR: only files changed vs PR base (any path in the repo).
+      - name: Extract from PR changed files
         if: github.event_name == 'pull_request'
         run: |
           python3 scripts/extract_messages.py \
@@ -30,11 +30,30 @@ jobs:
             --base "${{ github.event.pull_request.base.sha }}" \
             -o out/texts.jsonl
 
-      - name: Extract user-facing strings (full translations tree)
-        if: github.event_name != 'pull_request'
+      # Push to main: only files in this push range (not whole repo).
+      - name: Extract from push changed files
+        if: github.event_name == 'push'
         run: |
+          BEFORE="${{ github.event.before }}"
+          if [ -z "$BEFORE" ] || [ "$BEFORE" = "0000000000000000000000000000000000000000" ]; then
+            BEFORE="$(git hash-object -t tree /dev/null)"
+          fi
           python3 scripts/extract_messages.py \
             --root . \
+            --changed-only \
+            --base "$BEFORE" \
+            -o out/texts.jsonl
+
+      # Manual dispatch: same as PR against default branch tip if possible
+      - name: Extract (workflow_dispatch — changed vs origin/main)
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git fetch origin main --depth=1 || true
+          BASE="$(git merge-base HEAD origin/main 2>/dev/null || echo HEAD~1)"
+          python3 scripts/extract_messages.py \
+            --root . \
+            --changed-only \
+            --base "$BASE" \
             -o out/texts.jsonl
 
       - uses: actions/upload-artifact@v4
@@ -48,16 +67,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - uses: actions/download-artifact@v4
         with:
           name: texts-jsonl
           path: out
-
       - name: Consistency check
         run: python3 scripts/check_consistency.py -i out/texts.jsonl
 
@@ -67,23 +83,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
-
-      - name: Install npm dependencies
-        run: npm install
-
+      - run: npm install
       - uses: actions/download-artifact@v4
         with:
           name: texts-jsonl
           path: out
-
       - name: Spell check
         run: python3 scripts/check_spelling.py -i out/texts.jsonl
 
@@ -93,20 +103,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-
       - uses: actions/download-artifact@v4
         with:
           name: texts-jsonl
           path: out
-
       - name: Start LanguageTool
-        run: |
-          docker run -d --name languagetool -p 8010:8010 silviof/docker-languagetool
-
+        run: docker run -d --name languagetool -p 8010:8010 silviof/docker-languagetool
       - name: Grammar check
         env:
           LQ_LT_ENDPOINT: http://localhost:8010/v2/check
@@ -124,24 +129,18 @@ jobs:
           echo "consistency=${{ needs.consistency.result }}"
           echo "spelling=${{ needs.spelling.result }}"
           echo "grammar=${{ needs.grammar.result }}"
-
           failed=0
           if [ "${{ needs.consistency.result }}" != "success" ]; then
-            echo "::error::Consistency check failed"
-            failed=1
+            echo "::error::Consistency check failed"; failed=1
           fi
           if [ "${{ needs.spelling.result }}" != "success" ]; then
-            echo "::error::Spell check failed"
-            failed=1
+            echo "::error::Spell check failed"; failed=1
           fi
           if [ "${{ needs.grammar.result }}" != "success" ]; then
-            echo "::error::Grammar check failed"
-            failed=1
+            echo "::error::Grammar check failed"; failed=1
           fi
-
           if [ "$failed" -ne 0 ]; then
-            echo "Localization Quality Gate FAILED — consistency / spelling / grammar must all pass."
+            echo "Localization Quality Gate FAILED"
             exit 1
           fi
-
           echo "Localization Quality Gate passed."
