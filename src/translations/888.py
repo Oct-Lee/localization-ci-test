@@ -3,7 +3,7 @@
 
 CAMERA_NOT_FOUND_ERROR = (
     "camera[{camera_id}] not Founded. "  # spelling: Founded
-    "Please check whether the 'camera_id' parameter of the configration file is correct"  # spelling: configration
+    "Please check whether the 'camera_id' parameter of the configration fisle is correct"  # spelling: configration
 )
 
 
