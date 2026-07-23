@@ -1,1 +1,1 @@
-DEVELOPER_MODE = "Developer Mode wuord summer"
+Developer Mode wuord summer
