@@ -29,21 +29,26 @@ Chinese (`chinese.py`) is included in consistency checks only (no spell/grammar)
 
 ```text
 src/translations/
-  english.py
-  chinese.py
-  portuguese.py
+  english.py | chinese.py | portuguese.py   # 标准语言文件名
+  *.py                                      # 其它文案模块也会被扫描（按内容推断 locale）
 scripts/
-  extract_messages.py
-  check_consistency.py
-  check_spelling.py
-  check_grammar.py
-  run_lq_gate.py
-  lq_common.py
-cspell.json
-dictionaries/unitx-terms.txt
-languagetool-ignore.txt
-.github/workflows/localization-check.yml
+  extract_messages.py   # 支持全量 / --changed-only PR 增量
 ```
+
+### 为什么以前新增 `666.py` / `888.py` 不会被检查？
+
+旧逻辑**只认**文件名 `english.py` / `chinese.py` / `portuguese.py`。  
+现已改为扫描 `translations*/**/*.py`，并用文件名或文案内容推断 `en` / `zh` / `pt`。
+
+### PR 增量
+
+`pull_request` 事件下使用：
+
+```bash
+python3 scripts/extract_messages.py --changed-only --base <PR_BASE_SHA>
+```
+
+只抽取相对 base **变更过的** translations 下 `.py`，不做整仓检测。
 
 ## Local run
 

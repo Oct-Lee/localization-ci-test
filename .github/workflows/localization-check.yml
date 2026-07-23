@@ -13,12 +13,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Need full history for PR base...HEAD diff
+          fetch-depth: 0
 
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Extract user-facing strings
+      - name: Extract user-facing strings (PR incremental)
+        if: github.event_name == 'pull_request'
+        run: |
+          python3 scripts/extract_messages.py \
+            --root . \
+            --changed-only \
+            --base "${{ github.event.pull_request.base.sha }}" \
+            -o out/texts.jsonl
+
+      - name: Extract user-facing strings (full translations tree)
+        if: github.event_name != 'pull_request'
         run: |
           python3 scripts/extract_messages.py \
             --root . \
@@ -48,7 +61,6 @@ jobs:
       - name: Consistency check
         run: python3 scripts/check_consistency.py -i out/texts.jsonl
 
-  # Spelling and grammar run in parallel; neither waits on the other.
   spelling:
     name: Spell (cspell)
     needs: extract
@@ -60,7 +72,6 @@ jobs:
         with:
           python-version: "3.12"
 
-      # cspell 10 requires Node >= 22.18
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -102,7 +113,6 @@ jobs:
           LQ_STRICT_GRAMMAR: "1"
         run: python3 scripts/check_grammar.py -i out/texts.jsonl
 
-  # Aggregate: overall gate fails if any parallel check failed.
   gate:
     name: Gate result
     needs: [consistency, spelling, grammar]

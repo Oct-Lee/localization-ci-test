@@ -30,16 +30,6 @@ def check_package(pkg: str, locales: dict) -> list[tuple]:
     """Return list of (severity, file, line, message)."""
     findings: list[tuple] = []
     en = locales.get("en", {})
-    if not en:
-        findings.append(
-            (
-                "error",
-                pkg,
-                1,
-                f"Package {pkg} has no english.py baseline",
-            )
-        )
-        return findings
 
     # Empty / whitespace + Chinese punctuation on every locale record
     for locale, keys in locales.items():
@@ -64,8 +54,19 @@ def check_package(pkg: str, locales: dict) -> list[tuple]:
                     )
                 )
 
-    for locale in ("zh", "pt"):
-        other = locales.get(locale, {})
+    # Incremental PR catalogs may contain only zh/pt; skip cross-locale
+    # alignment when there is no english baseline in this extract.
+    if not en:
+        if not findings:
+            print(
+                f"Package {pkg}: no english strings in catalog; "
+                "skipped cross-locale key alignment"
+            )
+        return findings
+
+    for locale, other in locales.items():
+        if locale == "en":
+            continue
         # Missing keys in other locale
         for key, en_rec in en.items():
             if key not in other:
@@ -93,7 +94,7 @@ def check_package(pkg: str, locales: dict) -> list[tuple]:
                     )
                 )
 
-        # Extra keys in other locale (warn — still Error per plan key alignment)
+        # Extra keys in other locale
         for key, orec in other.items():
             if key not in en:
                 findings.append(
