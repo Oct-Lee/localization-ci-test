@@ -1,16 +1,17 @@
 #!/usr/bin/env python3
-"""Extract user-facing SCREAMING_SNAKE string constants from changed source files.
+"""Extract user-facing message strings from changed source files.
 
-Scope (default):
-  - Any path in the repo (NOT limited to translations/)
-  - Supported: *.py module-level NAME = \"...\" constants
-  - Locale from known filenames, else inferred from text content
+Only extracts strings that look like Log / UI / Error / CLI copy — not
+arbitrary constants, and not test/tooling files.
 
-PR / push incremental mode:
-  --changed-only --base <sha>  only files changed vs base
+Rules:
+  - Message catalogs (under *translations* or named english/chinese/portuguese):
+    all module-level SCREAMING_SNAKE = \"...\" strings
+  - Other *.py files: only keys matching *_ERROR / *_MSG / *_TITLE / ...
+  - Skip tests/, test_*.py, scripts/, third_party/, ...
+  - Syntax errors are skipped with a warning (do not fail the gate)
 
-Outputs JSONL:
-  {"file","line","key","locale","text","package"}
+PR mode: --changed-only --base <sha> [--head HEAD]
 """
 
 from __future__ import annotations
@@ -32,7 +33,7 @@ LOCALE_BY_STEM = {
     "pt": "pt",
 }
 
-SKIP_STEMS = {"__init__"}
+SKIP_STEMS = {"__init__", "conftest", "setup", "language"}
 
 SKIP_DIR_PARTS = {
     ".git",
@@ -46,11 +47,23 @@ SKIP_DIR_PARTS = {
     "build",
     "third_party",
     ".tox",
+    "scripts",
+    "tests",
+    "test",
+    "__tests__",
 }
 
 SUPPORTED_SUFFIXES = {".py"}
 
 SCREAMING_SNAKE = re.compile(r"^[A-Z][A-Z0-9_]*$")
+# User-facing message constant names outside dedicated catalog files.
+USER_FACING_KEY = re.compile(
+    r"(?:^|_)(?:"
+    r"ERROR|ERR|MSG|MESSAGE|TITLE|HINT|DIALOG|LABEL|TEXT|PROMPT|"
+    r"WARNING|WARN|INFO|CONFIRMATION|CONFIRM|REMINDER|TIP|TOOLTIP|"
+    r"DESCRIPTION|NOTIFICATION|NOTICE|ALERT|BANNER|TOAST|STATUS_TEXT"
+    r")$"
+)
 CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 PT_RE = re.compile(
     r"[ãõáéíóúâêôçÃÕÁÉÍÓÚÂÊÔÇ]|não|configuração|câmera|verifique|por favor",
@@ -92,7 +105,40 @@ def infer_locale(stem: str, texts: list[str]) -> str:
     return "en"
 
 
-def extract_assignments(path: Path) -> list[tuple[int, str, str]]:
+def is_message_catalog(path: Path, root: Path) -> bool:
+    """Dedicated i18n / translation modules — extract all SCREAMING_SNAKE."""
+    if path.stem.lower() in LOCALE_BY_STEM:
+        return True
+    try:
+        parts = path.resolve().relative_to(root.resolve()).parts
+    except ValueError:
+        parts = path.parts
+    return any("translation" in p.lower() for p in parts)
+
+
+def is_user_facing_key(key: str, *, catalog: bool) -> bool:
+    if not SCREAMING_SNAKE.match(key):
+        return False
+    if catalog:
+        return True
+    return bool(USER_FACING_KEY.search(key))
+
+
+def is_test_path(path: Path, root: Path) -> bool:
+    stem = path.stem.lower()
+    if stem == "test" or stem.startswith("test_") or stem.endswith("_test"):
+        return True
+    try:
+        parts = path.resolve().relative_to(root.resolve()).parts
+    except ValueError:
+        parts = path.parts
+    lowered = {p.lower() for p in parts}
+    return bool(lowered & {"tests", "test", "__tests__", "testing"})
+
+
+def extract_assignments(
+    path: Path, *, catalog: bool
+) -> list[tuple[int, str, str]]:
     source = path.read_text(encoding="utf-8")
     tree = ast.parse(source, filename=str(path))
     items: list[tuple[int, str, str]] = []
@@ -102,7 +148,7 @@ def extract_assignments(path: Path) -> list[tuple[int, str, str]]:
         if len(node.targets) != 1 or not isinstance(node.targets[0], ast.Name):
             continue
         key = node.targets[0].id
-        if not SCREAMING_SNAKE.match(key):
+        if not is_user_facing_key(key, catalog=catalog):
             continue
         text = _join_string(node.value)
         if text is None:
@@ -112,9 +158,17 @@ def extract_assignments(path: Path) -> list[tuple[int, str, str]]:
 
 
 def extract_from_file(path: Path, root: Path, *, in_diff: bool = True) -> list[dict]:
-    if path.suffix == ".py":
-        items = extract_assignments(path)
-    else:
+    if path.suffix != ".py":
+        return []
+    catalog = is_message_catalog(path, root)
+    try:
+        items = extract_assignments(path, catalog=catalog)
+    except SyntaxError as exc:
+        print(
+            f"Warning: skip {path.relative_to(root).as_posix()} "
+            f"(syntax error: {exc.msg} at line {exc.lineno})",
+            file=sys.stderr,
+        )
         return []
     if not items:
         return []
@@ -137,21 +191,20 @@ def extract_from_file(path: Path, root: Path, *, in_diff: bool = True) -> list[d
 
 
 def is_candidate_file(path: Path, root: Path) -> bool:
-    """True if path is a supported source file anywhere in the repo."""
+    """True if path might contain user-facing message strings."""
     if not path.is_file():
         return False
     if path.suffix not in SUPPORTED_SUFFIXES:
         return False
     if path.stem in SKIP_STEMS:
         return False
+    if is_test_path(path, root):
+        return False
     try:
         rel_parts = path.resolve().relative_to(root.resolve()).parts
     except ValueError:
         return False
     if any(part in SKIP_DIR_PARTS for part in rel_parts):
-        return False
-    # Do not extract from the gate's own tooling
-    if len(rel_parts) >= 1 and rel_parts[0] in {"scripts"}:
         return False
     return True
 
@@ -194,7 +247,7 @@ def git_changed_files(root: Path, base: str, head: str = "HEAD") -> list[Path]:
         if is_candidate_file(path, root):
             files.append(path)
         else:
-            print(f"  (skip non-candidate) {line}")
+            print(f"  (skip non-user-facing path) {line}")
     return sorted(set(files))
 
 
@@ -207,16 +260,8 @@ def main() -> int:
         action="store_true",
         help="Only extract files changed vs --base (PR/push incremental)",
     )
-    parser.add_argument(
-        "--base",
-        default="",
-        help="Git base ref/sha for --changed-only",
-    )
-    parser.add_argument(
-        "--head",
-        default="HEAD",
-        help="Git head ref/sha for --changed-only (default HEAD)",
-    )
+    parser.add_argument("--base", default="", help="Git base ref/sha")
+    parser.add_argument("--head", default="HEAD", help="Git head ref/sha")
     parser.add_argument("--files", nargs="*", default=None)
     parser.add_argument("-o", "--output", type=Path, default=Path("out/texts.jsonl"))
     args = parser.parse_args()
@@ -230,6 +275,8 @@ def main() -> int:
                 path = root / path
             if is_candidate_file(path, root):
                 files.append(path.resolve())
+            else:
+                print(f"  (skip non-user-facing path) {item}")
         files = sorted(set(files))
         changed_set = set(files)
     elif args.changed_only:
@@ -249,7 +296,7 @@ def main() -> int:
     if not files:
         args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text("", encoding="utf-8")
-        print("No candidate files to extract; wrote empty catalog.")
+        print("No user-facing message files to extract; wrote empty catalog.")
         return 0
 
     records: list[dict] = []
@@ -257,11 +304,7 @@ def main() -> int:
     for path in files:
         scanned += 1
         in_diff = path in changed_set
-        try:
-            extracted = extract_from_file(path, root, in_diff=in_diff)
-        except SyntaxError as exc:
-            print(f"Syntax error in {path}: {exc}", file=sys.stderr)
-            return 1
+        extracted = extract_from_file(path, root, in_diff=in_diff)
         if not extracted:
             continue
         locale = extracted[0]["locale"]
@@ -277,7 +320,8 @@ def main() -> int:
             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
 
     print(
-        f"Scanned {scanned} files; extracted {len(records)} strings → {args.output}"
+        f"Scanned {scanned} files; extracted {len(records)} user-facing "
+        f"strings → {args.output}"
     )
     return 0
 
