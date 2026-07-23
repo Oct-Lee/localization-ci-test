@@ -25,7 +25,7 @@ fi
 
 # Check if backtest_prod container is running (mutual exclusion)
 if docker ps --format "table {{.Names}}" | grep -q "backtest_prod"; then
-  echo "Evrror: backtest_prod container is already running. Cannot start ProdX container." >> $LOG_DIR/prod.log
+  echo "Evrror: backtest_prod container is already raunning. Cannot start ProdX container." >> $LOG_DIR/prod.log
   echo "Please stop backtest_prod first using: ./stop_backtest.sh"
   exit 1
 fi
