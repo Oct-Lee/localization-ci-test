@@ -125,21 +125,35 @@ def main() -> int:
         )
         return 1
 
+    lint_targets: list[str] = []
+    for locale in ("en", "pt"):
+        locale_dir = spell_root / locale
+        if locale_dir.is_dir() and any(locale_dir.glob("*.txt")):
+            lint_targets.append(str(locale_dir / "*.txt"))
+    if not lint_targets:
+        print("No spell input files generated")
+        return 0
+
     cmd.extend(
         [
             "lint",
             "--no-progress",
             "--no-summary",
             "--unique",
-            f"{spell_root}/en/**",
-            f"{spell_root}/pt/**",
+            "--no-color",
+            *lint_targets,
         ]
     )
     if args.config.is_file():
         cmd.extend(["--config", str(args.config.resolve())])
 
+    print("Running:", " ".join(cmd), flush=True)
     proc = subprocess.run(cmd, capture_output=True, text=True, check=False)
     output = (proc.stdout or "") + (proc.stderr or "")
+    if output.strip():
+        print("--- cspell raw output ---")
+        print(output)
+        print("--- end cspell output ---")
     errors = 0
     seen: set[tuple] = set()
 

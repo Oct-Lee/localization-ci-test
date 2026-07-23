@@ -76,9 +76,8 @@ def check_text(
     for item in result.get("matches", []):
         rule = (item.get("rule") or {}).get("id", "")
         category = ((item.get("rule") or {}).get("category") or {}).get("id", "")
-        # Spelling is owned by cspell — drop LT morfologik/spelling hits.
-        if rule.startswith("MORFOLOGIK_") or "SPELL" in rule.upper():
-            continue
+        # Keep TYPOS/MORFOLOGIK — spelling mistakes must surface even if
+        # cspell is misconfigured; duplicate reports with cspell are OK.
         # Drop pure style / preference suggestions by default
         if category.upper() in {
             "STYLE",

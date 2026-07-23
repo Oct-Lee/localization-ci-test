@@ -24,11 +24,17 @@ jobs:
       - name: Extract from PR changed files
         if: github.event_name == 'pull_request'
         run: |
+          echo "PR base=${{ github.event.pull_request.base.sha }}"
+          echo "PR head=${{ github.event.pull_request.head.sha }}"
           python3 scripts/extract_messages.py \
             --root . \
             --changed-only \
             --base "${{ github.event.pull_request.base.sha }}" \
+            --head "${{ github.event.pull_request.head.sha }}" \
             -o out/texts.jsonl
+          echo "===== extracted catalog ====="
+          cat out/texts.jsonl || true
+          echo "===== end catalog ====="
 
       # Push to main: only files in this push range (not whole repo).
       - name: Extract from push changed files
@@ -43,6 +49,9 @@ jobs:
             --changed-only \
             --base "$BEFORE" \
             -o out/texts.jsonl
+          echo "===== extracted catalog ====="
+          cat out/texts.jsonl || true
+          echo "===== end catalog ====="
 
       # Manual dispatch: same as PR against default branch tip if possible
       - name: Extract (workflow_dispatch — changed vs origin/main)

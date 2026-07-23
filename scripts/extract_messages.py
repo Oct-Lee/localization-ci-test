@@ -165,14 +165,15 @@ def discover_files(root: Path, globs: list[str] | None) -> list[Path]:
     return sorted(files)
 
 
-def git_changed_files(root: Path, base: str) -> list[Path]:
-    """Return candidate source files changed vs git base ref."""
+def git_changed_files(root: Path, base: str, head: str = "HEAD") -> list[Path]:
+    """Return candidate source files changed between base and head."""
     attempts = [
-        ["git", "diff", "--name-only", "--diff-filter=ACMR", f"{base}...HEAD"],
-        ["git", "diff", "--name-only", "--diff-filter=ACMR", base, "HEAD"],
+        ["git", "diff", "--name-only", "--diff-filter=ACMR", f"{base}...{head}"],
+        ["git", "diff", "--name-only", "--diff-filter=ACMR", base, head],
     ]
     proc = None
     for cmd in attempts:
+        print(f"+ {' '.join(cmd)}", flush=True)
         proc = subprocess.run(
             cmd, cwd=root, capture_output=True, text=True, check=False
         )
@@ -180,8 +181,9 @@ def git_changed_files(root: Path, base: str) -> list[Path]:
             break
     if proc is None or proc.returncode != 0:
         err = proc.stderr if proc else "no attempt"
-        raise RuntimeError(f"git diff failed against base={base}: {err}")
+        raise RuntimeError(f"git diff failed against base={base} head={head}: {err}")
 
+    print(proc.stdout)
     files: list[Path] = []
     for line in proc.stdout.splitlines():
         line = line.strip()
@@ -190,6 +192,8 @@ def git_changed_files(root: Path, base: str) -> list[Path]:
         path = (root / line).resolve()
         if is_candidate_file(path, root):
             files.append(path)
+        else:
+            print(f"  (skip non-candidate) {line}")
     return sorted(set(files))
 
 
@@ -206,6 +210,11 @@ def main() -> int:
         "--base",
         default="",
         help="Git base ref/sha for --changed-only",
+    )
+    parser.add_argument(
+        "--head",
+        default="HEAD",
+        help="Git head ref/sha for --changed-only (default HEAD)",
     )
     parser.add_argument("--files", nargs="*", default=None)
     parser.add_argument("-o", "--output", type=Path, default=Path("out/texts.jsonl"))
@@ -225,8 +234,8 @@ def main() -> int:
         if not args.base:
             print("--changed-only requires --base", file=sys.stderr)
             return 1
-        files = git_changed_files(root, args.base)
-        print(f"Changed candidate files vs {args.base}: {len(files)}")
+        files = git_changed_files(root, args.base, args.head)
+        print(f"Changed candidate files vs {args.base}...{args.head}: {len(files)}")
         for path in files:
             print(f"  - {path.relative_to(root).as_posix()}")
     else:
