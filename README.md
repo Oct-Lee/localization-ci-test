@@ -1,69 +1,48 @@
 # Localization Quality Gate — PoC
 
-GitHub CI gate：对 **PR / push 中变更或新建的文件** 抽取用户可见字符串，做拼写、语法与一致性检查。
+对 **PR/push 变更文件** 抽取用户可见字符串，做**通用**拼写、语法与一致性检查（不写死具体错词）。
 
-**不做整仓扫描**；**不限定 `translations/` 目录**——仓库任意路径只要改到含文案常量的源文件都会检。
+## 原则
 
-## 会检查什么
+| 项 | 行为 |
+|----|------|
+| 范围 | git diff 变更的 `*.py`（任意目录），不做整仓扫描 |
+| 抽取 | 模块级 `SCREAMING_SNAKE = "..."` 字符串常量 |
+| 拼写 | **cspell 全词典**（任意生僻/错误单词），术语白名单见 `dictionaries/` |
+| 语法 | **LanguageTool 全规则**（任意语法/拼写命中），仅忽略 `languagetool-ignore.txt` |
+| 一致性 | 空串、英文中文标点；多语言**共有 key** 的占位符对齐（默认不强制缺 key） |
 
-从变更文件中抽取模块级 `SCREAMING_SNAKE = "..."` 字符串（用户可见文案常量），然后：
+## 一致性说明
 
-| 检查 | 工具 | 严重度 |
-|------|------|--------|
-| 一致性（空串、占位符、英文中文标点等） | `check_consistency.py` | Error 阻断 |
-| 拼写 | cspell | Error 阻断 |
-| 语法 | LanguageTool | Error 阻断（`LQ_STRICT_GRAMMAR=1`） |
+默认 **incremental**（适合 PR）：
 
-中文内容：一致性会检；拼写/语法跳过（按 locale 推断）。
+- 只对「本次目录里出现在 ≥2 种语言」的 key 比对占位符  
+- **不会**因为只改了英文文件就要求中文补齐所有 key  
 
-**不会检查：** 变量名、函数名、类名、未改动的历史文件。
+全量对齐（可选）：
 
-## 必须要 `scripts/` 吗？
-
-**不必定叫 `scripts/`**，但需要有一段可执行的抽取 + 检查逻辑：
-
-| 做法 | 说明 |
-|------|------|
-| 独立脚本（当前：`scripts/*.py`） | **推荐**：可本地复跑、易测、workflow 只负责编排 |
-| 全部写进 workflow `run: \|` | 可以，但难维护、难本地调试 |
-| 只用 Marketplace Action 扫整文件 | 会把标识符当单词，误报高，**不推荐**单独使用 |
-
-目录可以改成 `tools/lq/` 等，本质是「抽取器 + 检查器」，不是文件夹名字本身。
-
-## PR 如何触发
-
-```text
-pull_request / push
-    → git diff base...HEAD（任意路径）
-    → 从变更的 *.py 抽取文案常量
-    → 并行：consistency / spelling / grammar
-    → gate 汇总阻断
+```bash
+python3 scripts/check_consistency.py -i out/texts.jsonl --strict-locale-alignment
 ```
 
 ## 本地运行
 
 ```bash
-# 模拟 PR：只抽相对 base 的变更文件
 python3 scripts/extract_messages.py --changed-only --base origin/main -o out/texts.jsonl
-
-# 指定文件（任意路径）
-python3 scripts/extract_messages.py --files path/to/any.py -o out/texts.jsonl
+# 或指定文件：
+python3 scripts/extract_messages.py --files src/translations/888.py src/translations/666.py -o out/texts.jsonl
 
 python3 scripts/check_consistency.py -i out/texts.jsonl
 npm install && python3 scripts/check_spelling.py -i out/texts.jsonl
-# LanguageTool 就绪后：
-python3 scripts/check_grammar.py -i out/texts.jsonl
+LQ_STRICT_GRAMMAR=1 python3 scripts/check_grammar.py -i out/texts.jsonl
 ```
 
-## 误报控制
+## 关于 scripts/
 
-1. 先抽取字符串再检查（cspell 看不到常量名）  
-2. [`dictionaries/unitx-terms.txt`](dictionaries/unitx-terms.txt) 术语表  
-3. [`languagetool-ignore.txt`](languagetool-ignore.txt) 规则忽略  
-4. 跳过 `scripts/`、`node_modules/`、`third_party/` 等目录  
+不必定叫 `scripts/`，但需要独立抽取/检查逻辑（比全部写进 workflow 更好维护）。
 
-## 当前限制（PoC）
+## 限制
 
-- 仅支持 **Python** 模块级大写常量字符串  
-- 尚未覆盖 JS/CSV/i18next 等格式（可后续加抽取器）  
-- 散落的 `raise ValueError("...")` 默认不抽（避免噪声；若需要可另开规则）
+- 目前主要支持 Python 大写常量字符串  
+- 中文不做 LT 拼写/语法（工具能力不足）；仍做一致性  
+- LanguageTool 免费规则无法覆盖所有语法问题（如部分主谓不一致）

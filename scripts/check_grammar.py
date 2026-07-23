@@ -1,8 +1,11 @@
 #!/usr/bin/env python3
-"""Run LanguageTool grammar checks on extracted EN/PT strings.
+"""Run LanguageTool checks on extracted EN/PT strings (arbitrary text).
 
-Findings are Warning by default (exit 0). Set LQ_STRICT_GRAMMAR=1 to fail.
-Chinese (zh) is skipped.
+Uses LanguageTool's full rule set for the locale — not a fixed word list.
+Only rules listed in languagetool-ignore.txt are skipped.
+
+Set LQ_STRICT_GRAMMAR=1 to fail the job on findings (CI default).
+Chinese (zh) is skipped (LT has no reliable Chinese spell/grammar for CI).
 """
 
 from __future__ import annotations
@@ -75,22 +78,7 @@ def check_text(
     matches = []
     for item in result.get("matches", []):
         rule = (item.get("rule") or {}).get("id", "")
-        category = ((item.get("rule") or {}).get("category") or {}).get("id", "")
-        # Keep TYPOS/MORFOLOGIK — spelling mistakes must surface even if
-        # cspell is misconfigured; duplicate reports with cspell are OK.
-        # Drop pure style / preference suggestions by default
-        if category.upper() in {
-            "STYLE",
-            "REDUNDANCY",
-            "CASING",
-            "TYPOGRAPHY",
-            "MISC",
-        }:
-            continue
-        if rule in ignore_rules or rule.startswith("STYLE_"):
-            continue
-        # PT orthography reform preferences are noisy for BR product copy
-        if rule.startswith("PT_AGREEMENT_REPLACE_"):
+        if rule in ignore_rules:
             continue
         matches.append(item)
     return matches
@@ -116,14 +104,21 @@ def main() -> int:
         return 1
 
     ignore_rules = load_ignore_rules(args.ignore_rules)
+    records = load_jsonl(args.input)
+    if not records:
+        print("LanguageTool check passed (empty catalog)")
+        return 0
+
     wait_ready(args.endpoint)
 
-    records = load_jsonl(args.input)
     findings = 0
-
     for record in records:
         locale = record["locale"]
         if locale not in LOCALE_LT:
+            print(
+                f"(skip grammar) {record['file']}:{record['line']} "
+                f"locale={locale} key={record['key']}"
+            )
             continue
         language = LOCALE_LT[locale]
         check_text_norm = normalize_for_grammar(record["text"])
@@ -141,12 +136,14 @@ def main() -> int:
             length = item.get("length", 0)
             wrong = check_text_norm[offset : offset + length]
             rule = (item.get("rule") or {}).get("id", "")
+            category = ((item.get("rule") or {}).get("category") or {}).get("id", "")
             msg = item.get("message", "")
             replacements = [
                 r.get("value") for r in (item.get("replacements") or [])[:5]
             ]
             detail = (
-                f"[{record['key']}] {msg} | text={wrong!r} | rule={rule}"
+                f"[{record['key']}] {msg} | text={wrong!r} | "
+                f"rule={rule} | category={category}"
             )
             if replacements:
                 detail += f" | suggestions={replacements}"
@@ -155,14 +152,14 @@ def main() -> int:
             gh_annotation(severity, record["file"], record["line"], detail)
 
     if findings == 0:
-        print("LanguageTool check passed (no grammar findings)")
+        print("LanguageTool check passed (no findings)")
         return 0
 
     print("")
     print(f"LanguageTool findings: {findings} (strict={strict})")
     if strict:
         return 1
-    print("Grammar findings treated as warnings (set LQ_STRICT_GRAMMAR=1 to fail)")
+    print("Findings treated as warnings (set LQ_STRICT_GRAMMAR=1 to fail)")
     return 0
 
 

@@ -1,122 +1,154 @@
 #!/usr/bin/env python3
-"""Cross-locale consistency checks for extracted translation strings.
+"""Consistency checks for extracted user-facing strings.
 
-Error-level findings (exit 1):
-  - missing keys vs english baseline
-  - placeholder set mismatch across locales
-  - Chinese punctuation inside english strings
+Default (PR incremental — safe):
   - empty / whitespace-only strings
+  - Chinese punctuation inside English strings
+  - placeholder mismatch for keys that appear in 2+ locales in THIS catalog
+
+Optional (--strict-locale-alignment):
+  - require every English key to exist in every other locale present
+  - flag keys present in other locales but missing in English
+
+Does NOT hardcode specific words or sample keys.
 """
 
 from __future__ import annotations
 
 import argparse
 import sys
+from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
-# Allow running as `python scripts/check_consistency.py`
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from lq_common import (  # noqa: E402
     CN_PUNCT_RE,
     gh_annotation,
-    group_by_package,
     load_jsonl,
     placeholder_set,
 )
 
 
-def check_package(pkg: str, locales: dict) -> list[tuple]:
-    """Return list of (severity, file, line, message)."""
+def check_records(
+    records: list[dict[str, Any]],
+    *,
+    strict_locale_alignment: bool,
+) -> list[tuple]:
     findings: list[tuple] = []
-    en = locales.get("en", {})
 
-    # Empty / whitespace + Chinese punctuation on every locale record
-    for locale, keys in locales.items():
-        for key, record in keys.items():
-            text = record["text"]
-            if not text.strip():
-                findings.append(
-                    (
-                        "error",
-                        record["file"],
-                        record["line"],
-                        f"Empty string for key {key} ({locale})",
-                    )
+    # Per-record checks (any file / any locale)
+    for record in records:
+        text = record.get("text", "")
+        key = record["key"]
+        locale = record["locale"]
+        if not str(text).strip():
+            findings.append(
+                (
+                    "error",
+                    record["file"],
+                    record["line"],
+                    f"Empty string for key {key} ({locale})",
                 )
-            if locale == "en" and CN_PUNCT_RE.search(text):
-                findings.append(
-                    (
-                        "error",
-                        record["file"],
-                        record["line"],
-                        f"Chinese punctuation in english string for key {key}",
-                    )
-                )
-
-    # Incremental PR catalogs may contain only zh/pt; skip cross-locale
-    # alignment when there is no english baseline in this extract.
-    if not en:
-        if not findings:
-            print(
-                f"Package {pkg}: no english strings in catalog; "
-                "skipped cross-locale key alignment"
             )
+        if locale == "en" and CN_PUNCT_RE.search(text):
+            findings.append(
+                (
+                    "error",
+                    record["file"],
+                    record["line"],
+                    f"Chinese punctuation in English string for key {key}",
+                )
+            )
+
+    # key -> locale -> list[record]  (same key may appear in multiple files)
+    by_key: dict[str, dict[str, list[dict[str, Any]]]] = defaultdict(
+        lambda: defaultdict(list)
+    )
+    for record in records:
+        by_key[record["key"]][record["locale"]].append(record)
+
+    # Placeholder consistency for keys present in multiple locales
+    for key, locales in by_key.items():
+        if len(locales) < 2:
+            continue
+        # Compare each locale's placeholder set against English if present,
+        # otherwise against the first locale as reference.
+        if "en" in locales:
+            ref_locale = "en"
+        else:
+            ref_locale = sorted(locales.keys())[0]
+        ref_rec = locales[ref_locale][0]
+        ref_ph = placeholder_set(ref_rec["text"])
+
+        for locale, recs in locales.items():
+            if locale == ref_locale:
+                continue
+            for rec in recs:
+                other_ph = placeholder_set(rec["text"])
+                if other_ph != ref_ph:
+                    findings.append(
+                        (
+                            "error",
+                            rec["file"],
+                            rec["line"],
+                            f"Placeholder mismatch for {key}: "
+                            f"{ref_locale}={sorted(ref_ph)} "
+                            f"{locale}={sorted(other_ph)}",
+                        )
+                    )
+
+    if not strict_locale_alignment:
         return findings
 
-    for locale, other in locales.items():
-        if locale == "en":
-            continue
-        # Missing keys in other locale
-        for key, en_rec in en.items():
-            if key not in other:
-                findings.append(
-                    (
-                        "error",
-                        en_rec["file"],
-                        en_rec["line"],
-                        f"Key {key} missing in {locale} "
-                        f"(package {pkg})",
-                    )
-                )
-                continue
-            en_ph = placeholder_set(en_rec["text"])
-            other_ph = placeholder_set(other[key]["text"])
-            if en_ph != other_ph:
-                orec = other[key]
-                findings.append(
-                    (
-                        "error",
-                        orec["file"],
-                        orec["line"],
-                        f"Placeholder mismatch for {key}: "
-                        f"en={sorted(en_ph)} {locale}={sorted(other_ph)}",
-                    )
-                )
+    # Strict: within each package directory, align keys across locales that
+    # appear in the catalog for that package.
+    packages: dict[str, dict[str, dict[str, dict[str, Any]]]] = defaultdict(
+        lambda: defaultdict(dict)
+    )
+    for record in records:
+        packages[record["package"]][record["locale"]][record["key"]] = record
 
-        # Extra keys in other locale
-        for key, orec in other.items():
-            if key not in en:
-                findings.append(
-                    (
-                        "error",
-                        orec["file"],
-                        orec["line"],
-                        f"Key {key} present in {locale} but missing in english "
-                        f"(package {pkg})",
+    for pkg, locales in packages.items():
+        if "en" not in locales:
+            continue
+        en = locales["en"]
+        for locale, other in locales.items():
+            if locale == "en":
+                continue
+            for key, en_rec in en.items():
+                if key not in other:
+                    findings.append(
+                        (
+                            "error",
+                            en_rec["file"],
+                            en_rec["line"],
+                            f"Key {key} missing in {locale} (package {pkg})",
+                        )
                     )
-                )
+            for key, orec in other.items():
+                if key not in en:
+                    findings.append(
+                        (
+                            "error",
+                            orec["file"],
+                            orec["line"],
+                            f"Key {key} present in {locale} but missing in "
+                            f"english (package {pkg})",
+                        )
+                    )
 
     return findings
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("-i", "--input", type=Path, default=Path("out/texts.jsonl"))
     parser.add_argument(
-        "-i",
-        "--input",
-        type=Path,
-        default=Path("out/texts.jsonl"),
+        "--strict-locale-alignment",
+        action="store_true",
+        help="Require full key alignment across locales (for full-catalog runs)",
     )
     args = parser.parse_args()
 
@@ -125,26 +157,28 @@ def main() -> int:
         return 1
 
     records = load_jsonl(args.input)
-    packages = group_by_package(records)
-    all_findings: list[tuple] = []
-    for pkg, locales in packages.items():
-        all_findings.extend(check_package(pkg, locales))
+    if not records:
+        print("Consistency check passed (empty catalog)")
+        return 0
 
-    errors = [f for f in all_findings if f[0] == "error"]
-    if not all_findings:
-        print("Consistency check passed")
+    findings = check_records(
+        records, strict_locale_alignment=args.strict_locale_alignment
+    )
+    if not findings:
+        mode = "strict" if args.strict_locale_alignment else "incremental"
+        print(f"Consistency check passed ({mode} mode)")
         return 0
 
     print("")
     print("Consistency issues found:")
     print("")
-    for severity, file, line, message in all_findings:
+    for severity, file, line, message in findings:
         print(f"[{severity.upper()}] {file}:{line}: {message}")
         gh_annotation(severity, file, line, message)
 
     print("")
-    print(f"Total: {len(errors)} error(s)")
-    return 1 if errors else 0
+    print(f"Total: {len(findings)} error(s)")
+    return 1
 
 
 if __name__ == "__main__":

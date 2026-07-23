@@ -11,32 +11,18 @@ from typing import Any, Iterable
 # Named placeholders {camera_id} and positional {}
 PLACEHOLDER_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}|\{\}")
 CN_PUNCT_RE = re.compile(r"[，。；：！？]")
-LOCALE_LT = {"en": "en-US", "pt": "pt-PT"}
+LOCALE_LT = {"en": "en-US", "pt": "pt-BR"}
 LOCALE_CSPELL = {"en": "en", "pt": "pt"}
-
-# Product names / identifiers replaced before LanguageTool to cut noise.
-PRODUCT_TERMS = (
-    "ProdX",
-    "OptiX",
-    "CorteX",
-    "Digix",
-    "UnitX",
-    "V6Flex",
-    "V6",
-)
 
 
 def normalize_for_grammar(text: str) -> str:
-    """Replace format placeholders and product terms for LanguageTool."""
+    """Minimal normalization so LanguageTool can analyze arbitrary prose.
+
+    Only replaces format placeholders. Does not hardcode product words or
+    rewrite the sentence beyond what is required for {name} / {} tokens.
+    """
     text = re.sub(r"\{[A-Za-z_][A-Za-z0-9_]*\}", "Item", text)
     text = text.replace("{}", "Item")
-    # Quoted technical identifiers: 'camera_id'
-    text = re.sub(r"'[A-Za-z_][A-Za-z0-9_]*'", "'field'", text)
-    text = re.sub(r'"[A-Za-z_][A-Za-z0-9_]*"', '"field"', text)
-    for term in PRODUCT_TERMS:
-        text = text.replace(term, "App")
-    # Strip residual Chinese punctuation that confuses EN/PT analyzers
-    text = CN_PUNCT_RE.sub(",", text)
     return text
 
 
@@ -73,7 +59,6 @@ def gh_annotation(
     message: str,
 ) -> None:
     """Emit a GitHub Actions workflow command annotation."""
-    # Escape for workflow commands
     safe = (
         message.replace("%", "%25")
         .replace("\r", "%0D")
@@ -87,7 +72,7 @@ def gh_annotation(
 def group_by_package(
     records: Iterable[dict[str, Any]],
 ) -> dict[str, dict[str, dict[str, dict[str, Any]]]]:
-    """package -> locale -> key -> record"""
+    """package -> locale -> key -> record (last wins)."""
     packages: dict[str, dict[str, dict[str, dict[str, Any]]]] = {}
     for record in records:
         pkg = record["package"]
