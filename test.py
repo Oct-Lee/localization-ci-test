@@ -1,1 +1,1 @@
-DEVELOPER_MODD = "Developer Mude"
+Developer Mude
