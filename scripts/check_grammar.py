@@ -146,7 +146,8 @@ def main() -> int:
                 r.get("value") for r in (item.get("replacements") or [])[:5]
             ]
             detail = (
-                f"[{record['key']}] {msg} | text={wrong!r} | "
+                f"Grammar/language: {msg} | key={record['key']} | "
+                f"matched={wrong!r} | text={record['text']!r} | "
                 f"rule={rule} | category={category}"
             )
             if replacements:

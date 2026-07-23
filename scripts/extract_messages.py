@@ -61,7 +61,8 @@ USER_FACING_KEY = re.compile(
     r"(?:^|_)(?:"
     r"ERROR|ERR|MSG|MESSAGE|TITLE|HINT|DIALOG|LABEL|TEXT|PROMPT|"
     r"WARNING|WARN|INFO|CONFIRMATION|CONFIRM|REMINDER|TIP|TOOLTIP|"
-    r"DESCRIPTION|NOTIFICATION|NOTICE|ALERT|BANNER|TOAST|STATUS_TEXT"
+    r"DESCRIPTION|NOTIFICATION|NOTICE|ALERT|BANNER|TOAST|STATUS_TEXT|"
+    r"MODE|NAME|BUTTON|MENU|HEADER|FOOTER|PLACEHOLDER|CONTENT|HELP"
     r")$"
 )
 CJK_RE = re.compile(r"[\u4e00-\u9fff]")
@@ -125,15 +126,20 @@ def is_user_facing_key(key: str, *, catalog: bool) -> bool:
 
 
 def is_test_path(path: Path, root: Path) -> bool:
+    """Skip unit-test trees; allow root demo files like test.py with message constants."""
     stem = path.stem.lower()
-    if stem == "test" or stem.startswith("test_") or stem.endswith("_test"):
+    if stem.startswith("test_") or stem.endswith("_test"):
         return True
     try:
         parts = path.resolve().relative_to(root.resolve()).parts
     except ValueError:
         parts = path.parts
-    lowered = {p.lower() for p in parts}
-    return bool(lowered & {"tests", "test", "__tests__", "testing"})
+    # Only directory segments named tests/test — not a lone test.py at repo root.
+    if len(parts) >= 2:
+        lowered_dirs = {p.lower() for p in parts[:-1]}
+        if lowered_dirs & {"tests", "test", "__tests__", "testing"}:
+            return True
+    return False
 
 
 def extract_assignments(
@@ -164,9 +170,16 @@ def extract_from_file(path: Path, root: Path, *, in_diff: bool = True) -> list[d
     try:
         items = extract_assignments(path, catalog=catalog)
     except SyntaxError as exc:
+        # Not a localization finding — do not fail the gate on junk/unparseable files.
+        rel = path.relative_to(root).as_posix()
         print(
-            f"Warning: skip {path.relative_to(root).as_posix()} "
-            f"(syntax error: {exc.msg} at line {exc.lineno})",
+            f"::notice file={rel},line={exc.lineno or 1}::"
+            f"Skip unparseable file (not a spell/grammar finding): {exc.msg}",
+            file=sys.stderr,
+        )
+        print(
+            f"Warning: skip {rel} (Python syntax error at line {exc.lineno}: {exc.msg}). "
+            f"Fix the file syntax or remove it; LQ gate only checks string constants.",
             file=sys.stderr,
         )
         return []

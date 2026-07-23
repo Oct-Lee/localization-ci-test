@@ -1,30 +1,44 @@
 # Localization Quality Gate — PoC
 
-对 **PR/push 变更文件** 中的**用户可见文案**做拼写、语法与一致性检查。
+对 **PR/push 变更文件** 抽取**用户可见字符串**，做**通用**拼写、语法与一致性检查（不写死具体错词）。
 
 ## 检查什么 / 不检查什么
 
 | 检查 | 不检查 |
 |------|--------|
-| 错误提示 `*_ERROR` / `*_MSG` / `*_TITLE` … | 普通变量、函数名、类名 |
-| `translations*` / `english.py` 等文案目录中的大写常量 | `test.py`、`tests/`、`*_test.py` |
-| Log / UI / CLI / Exception 类文案常量 | 非文案业务代码、语法都坏掉的杂文件 |
-| | `scripts/` 门禁工具自身 |
-
-任意路径都可以，但必须是**用户可见文案**形态，不是「改了任意 .py 就扫全部字符串」。
+| 文案目录（`translations*` / `english.py`…）中的 `SCREAMING_SNAKE = "..."` | 普通变量、函数名、类名 |
+| 其它文件中的 `*_ERROR` / `*_MSG` / `*_MODE` / `*_DIALOG` 等文案常量 | `tests/`、`test_*.py`、`*_test.py` |
+| 任意拼写错误（cspell 词典） | `scripts/`、第三方目录 |
+| 任意语法/语言问题（LanguageTool 规则） | **无法解析的杂文件**（仅 notice，不阻断） |
 
 ## 行为摘要
 
-- 只检 PR/push **实际变更的文件**（不加载同目录 sibling）
-- 文案目录：抽取全部 `SCREAMING_SNAKE = "..."`  
-- 其它文件：仅 `*_ERROR` / `*_MSG` / `*_DIALOG` 等后缀  
-- 测试文件直接跳过；语法错误文件警告跳过，**不阻断合入**
+- 只检 PR/push **实际变更的文件**（不自动加载同目录其它文件）
+- 拼写/语法为通用引擎，不维护「错词黑名单」
+- 语法错误的 `.py`：**跳过并提示**，不会再用 `Syntax error` 误报成合入失败原因
+- 一致性：空串、英文中文标点；本次变更里多语言共有 key 的占位符对齐
+
+## 报错格式（示例）
+
+```text
+[ERROR] test.py:1: Spelling: Unknown word (wuord) | key=DEVELOPER_MODE | text='Developer Mode wuord summer'
+```
 
 ## 本地运行
 
 ```bash
 python3 scripts/extract_messages.py --changed-only --base origin/main -o out/texts.jsonl
+# 或：
+python3 scripts/extract_messages.py --files test.py -o out/texts.jsonl
+
 python3 scripts/check_consistency.py -i out/texts.jsonl
 npm install && python3 scripts/check_spelling.py -i out/texts.jsonl
 LQ_STRICT_GRAMMAR=1 python3 scripts/check_grammar.py -i out/texts.jsonl
 ```
+
+## 已知坑
+
+| 问题 | 原因 | 处理 |
+|------|------|------|
+| `oef` 等短词不报 | cspell 默认 `minWordLength=4` | 已设为 `2` |
+| 合入时只看到 Syntax error | 杂文件无法 parse 曾直接失败 | 已改为 skip + notice |

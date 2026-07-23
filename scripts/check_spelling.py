@@ -180,7 +180,9 @@ def main() -> int:
         if fingerprint in seen:
             continue
         seen.add(fingerprint)
-        detail = f"[{record['key']}] {msg}"
+        detail = (
+            f"Spelling: {msg} | key={record['key']} | text={record['text']!r}"
+        )
         print(f"[ERROR] {record['file']}:{record['line']}: {detail}")
         gh_annotation("error", record["file"], record["line"], detail)
         errors += 1
