@@ -1,7 +1,7 @@
 # Sample Chinese UI / error strings (mirrors unitx-monorepo Pattern A).
 
 CAMERA_NOT_FOUND_ERROR = (
-    "找到没有相机[{camera_id}]，请检查配置文件的camera_id参数是否正确"
+    "没有找到相机[{camera_id}]，请检查配置文件的camera_id参数是否正确"
 )
 
 CAPTURE_CONFIG_NOT_FOUND_ERROR = "采像设置 {cc} 不存在, 请在 OptiX 中创建它。"
