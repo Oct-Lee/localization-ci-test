@@ -8,6 +8,7 @@ Rules:
   - Message catalogs (under *translations* or named english/chinese/portuguese):
     all module-level SCREAMING_SNAKE = \"...\" strings
   - Other *.py files: only keys matching *_ERROR / *_MSG / *_TITLE / ...
+  - logger.info / logger.warning / logger.error (and logging.*) string args
   - Shell scripts (.sh or bash/sh shebang, even if misnamed .py):
     user-facing echo/printf quoted strings
   - Skip tests/, test_*.py, scripts/, third_party/, ...
@@ -76,6 +77,7 @@ SHELL_ECHO_RE = re.compile(
 SHELL_SKIP_TEXT = re.compile(
     r"^[\w./${}=:\-]+$"  # single token / path-like
 )
+LOGGER_METHODS = frozenset({"info", "warning", "error"})
 CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 PT_RE = re.compile(
     r"[ãõáéíóúâêôçÃÕÁÉÍÓÚÂÊÔÇ]|não|configuração|câmera|verifique|por favor",
@@ -87,7 +89,16 @@ def _join_string(node: ast.AST) -> str | None:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
         return node.value
     if isinstance(node, ast.JoinedStr):
-        return None
+        # Keep constant segments of f-strings for spell/grammar (drop expressions).
+        parts: list[str] = []
+        for value in node.values:
+            if isinstance(value, ast.Constant) and isinstance(value.value, str):
+                parts.append(value.value)
+            elif isinstance(value, ast.FormattedValue):
+                parts.append(" ")
+            else:
+                return None
+        return "".join(parts) if parts else None
     if isinstance(node, ast.BinOp) and isinstance(node.op, ast.Add):
         left = _join_string(node.left)
         right = _join_string(node.right)
@@ -95,7 +106,7 @@ def _join_string(node: ast.AST) -> str | None:
             return left + right
         return None
     if isinstance(node, ast.Tuple):
-        parts: list[str] = []
+        parts = []
         for elt in node.elts:
             part = _join_string(elt)
             if part is None:
@@ -103,6 +114,15 @@ def _join_string(node: ast.AST) -> str | None:
             parts.append(part)
         return "".join(parts)
     return None
+
+
+def is_user_facing_log_text(text: str) -> bool:
+    text = text.strip()
+    if len(text) < 3:
+        return False
+    if not re.search(r"[A-Za-z\u4e00-\u9fff]", text):
+        return False
+    return True
 
 
 def infer_locale(stem: str, texts: list[str]) -> str:
@@ -202,11 +222,11 @@ def extract_shell_echoes(path: Path) -> list[tuple[int, str, str]]:
 
 
 def extract_assignments(
-    path: Path, *, catalog: bool
+    tree: ast.AST, *, catalog: bool
 ) -> list[tuple[int, str, str]]:
-    source = path.read_text(encoding="utf-8")
-    tree = ast.parse(source, filename=str(path))
     items: list[tuple[int, str, str]] = []
+    if not isinstance(tree, ast.Module):
+        return items
     for node in tree.body:
         if not isinstance(node, ast.Assign):
             continue
@@ -222,6 +242,43 @@ def extract_assignments(
     return items
 
 
+def extract_logger_calls(tree: ast.AST) -> list[tuple[int, str, str]]:
+    """Extract string args from logger.info / warning / error (any receiver)."""
+    items: list[tuple[int, str, str]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        if not isinstance(node.func, ast.Attribute):
+            continue
+        method = node.func.attr
+        if method not in LOGGER_METHODS:
+            continue
+        arg: ast.AST | None = None
+        if node.args:
+            arg = node.args[0]
+        else:
+            for kw in node.keywords:
+                if kw.arg == "msg":
+                    arg = kw.value
+                    break
+        if arg is None:
+            continue
+        text = _join_string(arg)
+        if text is None or not is_user_facing_log_text(text):
+            continue
+        key = f"LOGGER_{method.upper()}_L{node.lineno}"
+        items.append((node.lineno, key, text))
+    return items
+
+
+def extract_python(path: Path, *, catalog: bool) -> list[tuple[int, str, str]]:
+    source = path.read_text(encoding="utf-8")
+    tree = ast.parse(source, filename=str(path))
+    items = extract_assignments(tree, catalog=catalog)
+    items.extend(extract_logger_calls(tree))
+    return items
+
+
 def extract_from_file(path: Path, root: Path, *, in_diff: bool = True) -> list[dict]:
     kind = detect_kind(path)
     if kind is None:
@@ -233,7 +290,7 @@ def extract_from_file(path: Path, root: Path, *, in_diff: bool = True) -> list[d
     else:
         catalog = is_message_catalog(path, root)
         try:
-            items = extract_assignments(path, catalog=catalog)
+            items = extract_python(path, catalog=catalog)
         except SyntaxError as exc:
             rel = path.relative_to(root).as_posix()
             print(

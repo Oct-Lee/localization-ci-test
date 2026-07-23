@@ -1,1 +1,1 @@
-logger.info("prod_ui qapp quited")
+logger.info("prod_ui vapp quited")
