@@ -1,1 +1,1 @@
-Developer Mude
+DEVELOPER_MODE = "Developer Mode word summer"
