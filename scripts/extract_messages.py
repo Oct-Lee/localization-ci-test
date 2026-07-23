@@ -8,8 +8,10 @@ Rules:
   - Message catalogs (under *translations* or named english/chinese/portuguese):
     all module-level SCREAMING_SNAKE = \"...\" strings
   - Other *.py files: only keys matching *_ERROR / *_MSG / *_TITLE / ...
+  - Shell scripts (.sh or bash/sh shebang, even if misnamed .py):
+    user-facing echo/printf quoted strings
   - Skip tests/, test_*.py, scripts/, third_party/, ...
-  - Syntax errors are skipped with a warning (do not fail the gate)
+  - Python syntax errors are skipped with a warning (do not fail the gate)
 
 PR mode: --changed-only --base <sha> [--head HEAD]
 """
@@ -53,7 +55,7 @@ SKIP_DIR_PARTS = {
     "__tests__",
 }
 
-SUPPORTED_SUFFIXES = {".py"}
+SUPPORTED_SUFFIXES = {".py", ".sh"}
 
 SCREAMING_SNAKE = re.compile(r"^[A-Z][A-Z0-9_]*$")
 # User-facing message constant names outside dedicated catalog files.
@@ -64,6 +66,15 @@ USER_FACING_KEY = re.compile(
     r"DESCRIPTION|NOTIFICATION|NOTICE|ALERT|BANNER|TOAST|STATUS_TEXT|"
     r"MODE|NAME|BUTTON|MENU|HEADER|FOOTER|PLACEHOLDER|CONTENT|HELP"
     r")$"
+)
+# Shell CLI / log output: echo "..." / printf "..."
+SHELL_ECHO_RE = re.compile(
+    r"""(?P<cmd>\becho\b|\bprintf\b)\s+(?:-[neE]+\s+)*(?P<q>["'])(?P<text>(?:\\.|(?!\2).)*)(?P=q)""",
+    re.MULTILINE,
+)
+# Skip purely technical / non-prose echo lines
+SHELL_SKIP_TEXT = re.compile(
+    r"^[\w./${}=:\-]+$"  # single token / path-like
 )
 CJK_RE = re.compile(r"[\u4e00-\u9fff]")
 PT_RE = re.compile(
@@ -142,6 +153,54 @@ def is_test_path(path: Path, root: Path) -> bool:
     return False
 
 
+def detect_kind(path: Path) -> str | None:
+    """Return 'python', 'shell', or None."""
+    try:
+        head = path.read_text(encoding="utf-8", errors="replace")[:120]
+    except OSError:
+        return None
+    first = head.lstrip().splitlines()[0] if head.strip() else ""
+    if first.startswith("#!") and re.search(r"\b(bash|sh|zsh|dash)\b", first):
+        return "shell"
+    if path.suffix == ".sh":
+        return "shell"
+    if path.suffix == ".py":
+        return "python"
+    return None
+
+
+def is_user_facing_shell_text(text: str) -> bool:
+    text = text.strip()
+    if len(text) < 4:
+        return False
+    if re.fullmatch(r"[$`./\\\w\-]+", text):
+        return False
+    if not re.search(r"[A-Za-z\u4e00-\u9fff]", text):
+        return False
+    return True
+
+
+def extract_shell_echoes(path: Path) -> list[tuple[int, str, str]]:
+    """Extract user-facing echo/printf string literals from shell scripts."""
+    source = path.read_text(encoding="utf-8")
+    items: list[tuple[int, str, str]] = []
+    for match in SHELL_ECHO_RE.finditer(source):
+        text = match.group("text")
+        text = (
+            text.replace("\\n", "\n")
+            .replace("\\t", "\t")
+            .replace('\\"', '"')
+            .replace("\\'", "'")
+            .replace("\\\\", "\\")
+        )
+        if not is_user_facing_shell_text(text):
+            continue
+        line = source.count("\n", 0, match.start()) + 1
+        key = f"SHELL_ECHO_L{line}"
+        items.append((line, key, text))
+    return items
+
+
 def extract_assignments(
     path: Path, *, catalog: bool
 ) -> list[tuple[int, str, str]]:
@@ -164,25 +223,30 @@ def extract_assignments(
 
 
 def extract_from_file(path: Path, root: Path, *, in_diff: bool = True) -> list[dict]:
-    if path.suffix != ".py":
+    kind = detect_kind(path)
+    if kind is None:
         return []
-    catalog = is_message_catalog(path, root)
-    try:
-        items = extract_assignments(path, catalog=catalog)
-    except SyntaxError as exc:
-        # Not a localization finding — do not fail the gate on junk/unparseable files.
-        rel = path.relative_to(root).as_posix()
-        print(
-            f"::notice file={rel},line={exc.lineno or 1}::"
-            f"Skip unparseable file (not a spell/grammar finding): {exc.msg}",
-            file=sys.stderr,
-        )
-        print(
-            f"Warning: skip {rel} (Python syntax error at line {exc.lineno}: {exc.msg}). "
-            f"Fix the file syntax or remove it; LQ gate only checks string constants.",
-            file=sys.stderr,
-        )
-        return []
+
+    items: list[tuple[int, str, str]] = []
+    if kind == "shell":
+        items = extract_shell_echoes(path)
+    else:
+        catalog = is_message_catalog(path, root)
+        try:
+            items = extract_assignments(path, catalog=catalog)
+        except SyntaxError as exc:
+            rel = path.relative_to(root).as_posix()
+            print(
+                f"::notice file={rel},line={exc.lineno or 1}::"
+                f"Skip unparseable Python file (not a spell/grammar finding): {exc.msg}",
+                file=sys.stderr,
+            )
+            print(
+                f"Warning: skip {rel} (Python syntax error at line {exc.lineno}: {exc.msg}).",
+                file=sys.stderr,
+            )
+            return []
+
     if not items:
         return []
     texts = [t for _, _, t in items]
@@ -207,11 +271,11 @@ def is_candidate_file(path: Path, root: Path) -> bool:
     """True if path might contain user-facing message strings."""
     if not path.is_file():
         return False
-    if path.suffix not in SUPPORTED_SUFFIXES:
-        return False
     if path.stem in SKIP_STEMS:
         return False
     if is_test_path(path, root):
+        return False
+    if detect_kind(path) is None:
         return False
     try:
         rel_parts = path.resolve().relative_to(root.resolve()).parts
@@ -224,7 +288,7 @@ def is_candidate_file(path: Path, root: Path) -> bool:
 
 def discover_files(root: Path, globs: list[str] | None) -> list[Path]:
     files: set[Path] = set()
-    patterns = globs or ["**/*.py"]
+    patterns = globs or ["**/*.py", "**/*.sh"]
     for pattern in patterns:
         for path in root.glob(pattern):
             if is_candidate_file(path, root):

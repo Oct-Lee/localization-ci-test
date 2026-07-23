@@ -7,9 +7,10 @@
 | 检查 | 不检查 |
 |------|--------|
 | 文案目录（`translations*` / `english.py`…）中的 `SCREAMING_SNAKE = "..."` | 普通变量、函数名、类名 |
-| 其它文件中的 `*_ERROR` / `*_MSG` / `*_MODE` / `*_DIALOG` 等文案常量 | `tests/`、`test_*.py`、`*_test.py` |
-| 任意拼写错误（cspell 词典） | `scripts/`、第三方目录 |
-| 任意语法/语言问题（LanguageTool 规则） | **无法解析的杂文件**（仅 notice，不阻断） |
+| 其它 `.py` 中的 `*_ERROR` / `*_MSG` / `*_MODE` / `*_DIALOG` 等文案常量 | `tests/`、`test_*.py`、`*_test.py` |
+| Shell（`.sh` 或 `#!/bin/bash` 等，含误命名为 `.py`）里的 `echo`/`printf` 用户文案 | `scripts/`、第三方目录 |
+| 任意拼写错误（cspell 词典） | **无法解析的杂 Python 文件**（仅 notice，不阻断） |
+| 任意语法/语言问题（LanguageTool 规则） | |
 
 ## 行为摘要
 
@@ -42,3 +43,4 @@ LQ_STRICT_GRAMMAR=1 python3 scripts/check_grammar.py -i out/texts.jsonl
 |------|------|------|
 | `oef` 等短词不报 | cspell 默认 `minWordLength=4` | 已设为 `2` |
 | 合入时只看到 Syntax error | 杂文件无法 parse 曾直接失败 | 已改为 skip + notice |
+| `test.py` 里 `Evrror` 不报 | 文件是 bash（`#!/bin/bash`），按 Python 解析会跳过 | 已支持 shell shebang / `.sh` 的 echo 文案 |
