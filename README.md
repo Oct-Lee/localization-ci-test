@@ -46,7 +46,9 @@ LQ_STRICT_GRAMMAR=1 python3 scripts/check_grammar.py -i out/texts.jsonl
 | 问题 | 原因 | 修复 |
 |------|------|------|
 | `oef` 等 3 字母错词不报 | cspell 默认 `minWordLength=4` | 设为 `2` |
-| `english.py`/`chinese.py` 占位符不一致不报 | PR 只改一个文件时未加载同目录其它语言文件 | 自动加载同目录 sibling，一致性用全量；拼写/语法只检 `in_diff` |
+
+**范围：** 只检查 PR/push **实际变更的文件**，不自动加载同目录其它文件。  
+跨语言占位符一致性：仅当本次 PR **同时改到** 多种语言文件且含同一 key 时才会比对。
 
 - 目前主要支持 Python 大写常量字符串  
 - 中文不做 LT 拼写/语法（工具能力不足）；仍做一致性  

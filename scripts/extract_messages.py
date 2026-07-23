@@ -136,21 +136,6 @@ def extract_from_file(path: Path, root: Path, *, in_diff: bool = True) -> list[d
     ]
 
 
-def sibling_candidate_files(root: Path, changed: list[Path]) -> list[Path]:
-    """Include other candidate *.py in the same directories as changed files.
-
-    Needed so consistency can compare placeholders across english/chinese/…
-    even when the PR only touches one locale file.
-    """
-    extra: set[Path] = set()
-    for path in changed:
-        parent = path.parent
-        for sibling in parent.glob("*.py"):
-            if is_candidate_file(sibling, root):
-                extra.add(sibling.resolve())
-    return sorted(extra)
-
-
 def is_candidate_file(path: Path, root: Path) -> bool:
     """True if path is a supported source file anywhere in the repo."""
     if not path.is_file():
@@ -245,13 +230,8 @@ def main() -> int:
                 path = root / path
             if is_candidate_file(path, root):
                 files.append(path.resolve())
+        files = sorted(set(files))
         changed_set = set(files)
-        # Same as PR mode: load directory siblings for placeholder consistency.
-        files = sibling_candidate_files(root, sorted(changed_set)) or sorted(changed_set)
-        print(f"Explicit files (+ same-dir siblings): {len(files)}")
-        for path in files:
-            mark = "changed" if path in changed_set else "sibling"
-            print(f"  - [{mark}] {path.relative_to(root).as_posix()}")
     elif args.changed_only:
         if not args.base:
             print("--changed-only requires --base", file=sys.stderr)
@@ -260,15 +240,8 @@ def main() -> int:
         print(f"Changed candidate files vs {args.base}...{args.head}: {len(changed)}")
         for path in changed:
             print(f"  - {path.relative_to(root).as_posix()}")
+        files = changed
         changed_set = set(changed)
-        # Pull sibling locale/message modules in the same directories for
-        # placeholder consistency, without treating them as "in_diff".
-        files = sibling_candidate_files(root, changed)
-        if files:
-            print(f"With same-directory siblings for consistency: {len(files)}")
-            for path in files:
-                mark = "changed" if path in changed_set else "sibling"
-                print(f"  - [{mark}] {path.relative_to(root).as_posix()}")
     else:
         files = discover_files(root, args.globs)
         changed_set = set(files)
